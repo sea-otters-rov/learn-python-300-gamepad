@@ -1,0 +1,11 @@
+# Source that Pylance reads but that is NOT in board\lib.
+#
+# adafruit_bus_device is built into the XIAO RP2350's firmware, so it is
+# deliberately not shipped in board\lib -- a copy there would be loaded instead
+# of the built-in one. Without its source here, every `from adafruit_bus_device
+# import ...` in the libraries would be unresolved in the editor.
+#
+# Installed with --no-deps by tools\setup.ps1: the declared dependency is
+# Adafruit-Blinka, a large host-side stack nothing here imports.
+
+adafruit-circuitpython-busdevice

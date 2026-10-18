@@ -1,0 +1,63 @@
+{
+  // Every task is "process", not "shell": a shell task runs through the default
+  // terminal profile, and if that is WSL the Windows python.exe fails inside
+  // Ubuntu. None of these needs a shell.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Games: play in the browser",
+      "detail": "Serve games\\ at http://localhost:8765 -- open that in Chrome. Stop with the trash-can icon.",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "http.server", "8765", "--bind", "127.0.0.1", "--directory", "${workspaceFolder}\\games"],
+      "problemMatcher": [],
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Board: sync all files",
+      "detail": "Copy everything in board\\ onto the XIAO.",
+      "type": "process",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\tools\\sync.ps1"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "silent", "panel": "dedicated" }
+    },
+    {
+      "label": "Board: sync all files (clean)",
+      "detail": "Sync, then DELETE anything on the XIAO that is not in board\\.",
+      "type": "process",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\tools\\sync.ps1", "-Clean"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Board: verify",
+      "detail": "Restart code.py and report what it printed. Close the Serial Monitor first -- the port is exclusive.",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["${workspaceFolder}\\tools\\verify_board.py"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    },
+    {
+      "label": "Board: serial console",
+      "detail": "Ctrl-C breaks to the REPL, Ctrl-D reloads, Ctrl-] quits. Close the Serial Monitor panel first.",
+      "type": "process",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["${workspaceFolder}\\tools\\console.py"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "focus": true }
+    },
+    {
+      "label": "Board: set up this machine",
+      "detail": "First-run setup: extensions, .venv, stubs.",
+      "type": "process",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\tools\\setup.ps1"],
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated" }
+    }
+  ]
+}

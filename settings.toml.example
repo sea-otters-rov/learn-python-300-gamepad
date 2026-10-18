@@ -1,0 +1,14 @@
+# Copied to board\settings.toml by tools\setup.ps1. That file is per board and
+# gitignored: a calibration belongs to ONE physical SEN0140 in ONE place.
+#
+# Run the SEN0140 calibration (imu_calibration.calibrate()) and paste the two
+# lines it prints below, uncommented. Left commented, the library reports the
+# sensors as "not calibrated" -- which is true, and still works; the gyro just
+# drifts and the compass is off. Do not fill in zeros: those would be reported
+# as a calibration that was never measured.
+#
+# The magnetometer offset comes from the surroundings as much as the sensor:
+# re-measure it whenever the board moves to a different mounting.
+
+# SEN0140_GYRO_BIAS = "-0.41, 0.36, -0.77"
+# SEN0140_MAG_OFFSET = "4.8, 66.4, -14.1"

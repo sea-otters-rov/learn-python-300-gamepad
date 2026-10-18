@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ROV Sim</title>
+<style>
+  [hidden] { display: none !important; }
+  :root {
+    --page: #04121a;
+    --text: #e8f4f4;
+    --dim: #8fb3b8;
+    --accent: #ffcf4a;
+    --panel: #0009;
+  }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--text);
+    font: 15px system-ui, sans-serif;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #stage { position: relative; width: min(100vw, 100vh * 16 / 9); aspect-ratio: 16 / 9; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .panel {
+    position: absolute;
+    background: var(--panel);
+    border-radius: 8px;
+    padding: 8px 10px;
+    font: 13px ui-monospace, monospace;
+    line-height: 1.45;
+    white-space: pre;
+    pointer-events: none;
+  }
+  #flight { top: 10px; left: 10px; }
+  #perf { top: 10px; right: 10px; color: var(--dim); text-align: right; }
+  #help { bottom: 10px; right: 10px; color: var(--dim); white-space: normal; max-width: 380px; font: 12px system-ui, sans-serif; }
+  #message {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  #message div { background: #000b; padding: 18px 26px; border-radius: 10px; text-align: center; line-height: 1.6; }
+  #message strong { color: var(--accent); font-size: 1.3em; }
+</style>
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+</head>
+<body>
+<div id="stage">
+  <canvas id="screen"></canvas>
+  <div class="panel" id="flight"></div>
+  <div class="panel" id="perf"></div>
+  <div class="panel" id="help">
+    Left stick: forward/back and turn. Right stick: sideways and up/down.
+    Tilt: pitch and roll. A closes the claw, B opens it. X changes camera,
+    Y switches pitch between tilt and level, Start resets.
+    Keyboard: arrows, W A S D, T F G H, Space, B, X, Y, Enter.
+    Q changes drawing resolution, I shows what the sim receives.
+  </div>
+  <div id="message" hidden><div id="message-text"></div></div>
+</div>
+<script src="pad.js"></script>
+<script type="module">
+// ROV Sim -- crab collection.
+//
+// Pick up every crab from the pool floor and drop it in the basket at the far
+// end, just under the surface. The clock starts at the first input and stops
+// when the last crab lands.
+//
+// The sim takes what the pilot WANTS, in fixed slots, and nothing else:
+//
+//   axes[0]  turn       -1 left  .. +1 right
+//   axes[1]  forward    -1 ahead .. +1 astern   (a stick pushed up reads -1)
+//   axes[2]  sideways   -1 left  .. +1 right
+//   axes[3]  up/down    -1 rise  .. +1 dive
+//   axes[4]  roll       -1 left side down .. +1 right side down
+//   axes[5]  pitch      -1 nose down .. +1 nose up
+//   buttons[0]  A      close the claw
+//   buttons[1]  B      open the claw
+//   buttons[2]  X      change camera
+//   buttons[3]  Y      pitch/roll follows tilt, or holds level by itself
+//   buttons[9]  Start  start again
+//
+// Which stick, tilt or button feeds which slot is the board's business; this
+// file never changes for it.
+
+import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+
+// ---- things worth changing ----------------------------------------------------
+
+const CRAB_COUNT = 5;
+const CRAB_SEED = 2026; // same seed, same crabs in the same places
+
+const POOL = { width: 20, length: 14, depth: 4.5 }; // m: x, z, y
+// the basket: far end of the pool, just under the surface
+const BASKET = { x: 0, z: -5.4, size: 1.4, top: -0.5, height: 0.7 };
+const START = { x: 0, y: -1.5, z: 5.5, heading: 0 };
+
+// ---- tuning -------------------------------------------------------------------
+
+const PHYSICS_STEP = 1 / 120;
+const FORWARD_ACCEL = 1.0; // m/s^2 at full stick
+const SIDEWAYS_ACCEL = 0.7;
+const VERTICAL_ACCEL = 0.7;
+const TURN_ACCEL = 2.0; // rad/s^2
+const WATER_DRAG = 1.2; // 1/s: top speed is accel / drag, so ~0.8 m/s ahead
+const TURN_DRAG = 2.5; // 1/s: top turn rate ~46 deg/s
+const BUOYANCY = 0.04; // m/s^2 upward: a real ROV is trimmed slightly light
+const CURRENT = new THREE.Vector3(0, 0, 0); // a pool has none; a lake would
+
+const MAX_PITCH = THREE.MathUtils.degToRad(35); // at full tilt
+const MAX_ROLL = THREE.MathUtils.degToRad(30);
+const ATTITUDE_GAIN = 1.0; // 1/s: how briskly it follows the tilt
+const ATTITUDE_RATE = THREE.MathUtils.degToRad(60); // deg/s at most
+
+const ROV_RADIUS = 0.35; // m, for bumping into walls and the basket
+const CLEARANCE = 0.25; // m, ROV centre above the floor
+const SURFACE = -0.25;
+const CLAW_TIP = new THREE.Vector3(0, -0.13, -0.47); // in the ROV's own frame
+const GRAB_RADIUS = 0.16; // m from claw tip to crab centre
+const CLAW_SPEED = 4; // rad/s the jaws swing
+const CRAB_HALF_HEIGHT = 0.05;
+const SINK_SPEED = 0.5; // m/s a dropped crab falls
+
+const WATER_COLOR = 0x1b6f80;
+const FOG_DENSITY = 0.055;
+const RESOLUTIONS = [[480, 270], [640, 360], [960, 540], [1280, 720], null];
+
+const FLOOR = -POOL.depth;
+const HALF_W = POOL.width / 2;
+const HALF_L = POOL.length / 2;
+
+// ---- setup --------------------------------------------------------------------
+
+function random(seed) {
+  // mulberry32: a seeded random number generator
+  return () => {
+    seed |= 0;
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const canvas = document.getElementById("screen");
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: "low-power" });
+} catch (error) {
+  document.getElementById("message").hidden = false;
+  document.getElementById("message-text").innerHTML =
+    "<strong>No 3D here</strong><br>This browser or laptop could not start WebGL.";
+  throw error;
+}
+renderer.setPixelRatio(1);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(WATER_COLOR);
+scene.fog = new THREE.FogExp2(WATER_COLOR, FOG_DENSITY);
+scene.add(new THREE.HemisphereLight(0xd8f6ff, 0x2a5560, 1.8));
+const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+sun.position.set(0.3, 1, 0.4);
+scene.add(sun);
+
+const camera = new THREE.PerspectiveCamera(70, 16 / 9, 0.05, 40);
+
+function flat(color) {
+  return new THREE.MeshLambertMaterial({ color, flatShading: true });
+}
+
+function part(geometry, x, y, z, rx = 0, ry = 0, rz = 0) {
+  const matrix = new THREE.Matrix4().compose(
+    new THREE.Vector3(x, y, z),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz)),
+    new THREE.Vector3(1, 1, 1),
+  );
+  return geometry.applyMatrix4(matrix);
+}
+
+// ---- the pool -----------------------------------------------------------------
+
+const tileImage = (() => {
+  const size = 128;
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const g = c.getContext("2d");
+  g.fillStyle = "#a9dde6";
+  g.fillRect(0, 0, size, size);
+  g.fillStyle = "#7fb9c4";
+  for (let i = 0; i < 4; i++) {
+    g.fillRect(0, i * 32, size, 2);
+    g.fillRect(i * 32, 0, 2, size);
+  }
+  return c;
+})();
+
+function tiled(width, height) {
+  // one texture metre holds 4 x 4 tiles, so tiles are 25 cm like a real pool
+  const texture = new THREE.CanvasTexture(tileImage);
+  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+  texture.repeat.set(width, height);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return new THREE.MeshLambertMaterial({ map: texture });
+}
+
+{
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(POOL.width, POOL.length), tiled(POOL.width, POOL.length));
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = FLOOR;
+  scene.add(floor);
+
+  const walls = [
+    [POOL.width, 0, -HALF_L, 0],
+    [POOL.width, 0, HALF_L, Math.PI],
+    [POOL.length, -HALF_W, 0, Math.PI / 2],
+    [POOL.length, HALF_W, 0, -Math.PI / 2],
+  ];
+  for (const [span, x, z, turn] of walls) {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(span, POOL.depth), tiled(span, POOL.depth));
+    wall.position.set(x, FLOOR / 2, z);
+    wall.rotation.y = turn;
+    scene.add(wall);
+  }
+
+  // dark lane lines on the floor, all one draw call
+  const lanes = [-6, -2, 2, 6].map((x) =>
+    part(new THREE.BoxGeometry(0.25, 0.01, POOL.length - 3), x, FLOOR + 0.006, 0),
+  );
+  scene.add(new THREE.Mesh(mergeGeometries(lanes), new THREE.MeshLambertMaterial({ color: 0x1d3c78 })));
+
+  // the surface, seen from underneath
+  const surface = new THREE.Mesh(
+    new THREE.PlaneGeometry(POOL.width, POOL.length),
+    new THREE.MeshBasicMaterial({ color: 0x8fe0ee, side: THREE.DoubleSide, transparent: true, opacity: 0.55 }),
+  );
+  surface.rotation.x = Math.PI / 2;
+  surface.position.y = 0;
+  scene.add(surface);
+}
+
+// ---- the basket ---------------------------------------------------------------
+
+const basketBottom = BASKET.top - BASKET.height;
+{
+  const s = BASKET.size;
+  const h = BASKET.height;
+  const t = 0.04;
+  const middle = BASKET.top - h / 2;
+  const pieces = [
+    part(new THREE.BoxGeometry(s, t, s), 0, basketBottom, 0),
+    part(new THREE.BoxGeometry(s, h, t), 0, middle, -s / 2),
+    part(new THREE.BoxGeometry(s, h, t), 0, middle, s / 2),
+    part(new THREE.BoxGeometry(t, h, s), -s / 2, middle, 0),
+    part(new THREE.BoxGeometry(t, h, s), s / 2, middle, 0),
+  ];
+  const basket = new THREE.Mesh(mergeGeometries(pieces), flat(0xff8a1f));
+  basket.position.set(BASKET.x, 0, BASKET.z);
+  scene.add(basket);
+  // a float line up to the surface so it can be found from a distance
+  const line = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, -BASKET.top, 5), flat(0xffffff));
+  line.position.set(BASKET.x, BASKET.top / 2, BASKET.z);
+  scene.add(line);
+}
+
+function insideBasket(x, z, margin) {
+  const half = BASKET.size / 2 - margin;
+  return Math.abs(x - BASKET.x) < half && Math.abs(z - BASKET.z) < half;
+}
+
+// ---- crabs --------------------------------------------------------------------
+
+const crabGeometry = (() => {
+  const pieces = [
+    part(new THREE.SphereGeometry(0.11, 8, 5).scale(1, 0.45, 0.8), 0, 0, 0),
+    part(new THREE.BoxGeometry(0.05, 0.03, 0.07), -0.075, 0.005, -0.1, 0, 0.4, 0),
+    part(new THREE.BoxGeometry(0.05, 0.03, 0.07), 0.075, 0.005, -0.1, 0, -0.4, 0),
+  ];
+  for (const side of [-1, 1]) {
+    for (const z of [-0.035, 0, 0.035]) {
+      pieces.push(part(new THREE.BoxGeometry(0.1, 0.012, 0.014), side * 0.12, -0.025, z, 0, 0, side * 0.45));
+    }
+  }
+  return mergeGeometries(pieces);
+})();
+const CRAB_COLOR = flat(0x6f8f2a);
+
+function crabSpots() {
+  const roll = random(CRAB_SEED);
+  const spots = [];
+  let tries = 0;
+  while (spots.length < CRAB_COUNT && tries++ < 5000) {
+    const x = (roll() * 2 - 1) * (HALF_W - 1.5);
+    const z = (roll() * 2 - 1) * (HALF_L - 1.5);
+    const turn = roll() * Math.PI * 2;
+    if (Math.hypot(x - START.x, z - START.z) < 2.5) continue;
+    if (spots.some((s) => Math.hypot(s.x - x, s.z - z) < 2.5)) continue;
+    spots.push({ x, z, turn });
+  }
+  return spots;
+}
+
+const crabs = crabSpots().map((spot) => {
+  const mesh = new THREE.Mesh(crabGeometry, CRAB_COLOR);
+  scene.add(mesh);
+  return { spot, mesh, position: new THREE.Vector3(), state: "floor" };
+});
+
+function placeCrabsAtHome() {
+  for (const crab of crabs) {
+    crab.state = "floor"; // "floor", "held", "sinking" or "collected"
+    crab.position.set(crab.spot.x, FLOOR + CRAB_HALF_HEIGHT, crab.spot.z);
+    crab.mesh.rotation.set(0, crab.spot.turn, 0);
+  }
+}
+
+// ---- marine snow --------------------------------------------------------------
+
+const SNOW_COUNT = 500;
+const SNOW_BOX = 16;
+const snowHome = new Float32Array(SNOW_COUNT * 3);
+const snowGeometry = new THREE.BufferGeometry();
+{
+  const roll = random(11);
+  for (let i = 0; i < snowHome.length; i++) snowHome[i] = roll() * SNOW_BOX;
+  snowGeometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(SNOW_COUNT * 3), 3));
+  scene.add(new THREE.Points(snowGeometry, new THREE.PointsMaterial({ color: 0xe0f4f0, size: 0.03 })));
+}
+
+// ---- the ROV ------------------------------------------------------------------
+
+const rovModel = new THREE.Group();
+const rovBody = new THREE.Group(); // hidden from the onboard camera, which sits inside it
+rovModel.add(rovBody);
+const jaws = [];
+{
+  const frame = flat(0x3a3f45);
+  const foam = flat(0xf2c230);
+  const black = flat(0x15181b);
+  const add = (parent, geometry, material, x, y, z) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    parent.add(mesh);
+    return mesh;
+  };
+  add(rovBody,new THREE.BoxGeometry(0.56, 0.12, 0.44), foam, 0, 0.17, 0);
+  add(rovBody,new THREE.BoxGeometry(0.6, 0.04, 0.48), frame, 0, -0.15, 0);
+  for (const [x, z] of [[-0.27, -0.21], [0.27, -0.21], [-0.27, 0.21], [0.27, 0.21]]) {
+    add(rovBody,new THREE.BoxGeometry(0.04, 0.3, 0.04), frame, x, 0, z);
+    const thruster = add(rovBody,new THREE.CylinderGeometry(0.055, 0.055, 0.12, 8), black, x * 1.15, -0.04, z * 1.15);
+    thruster.rotation.set(Math.PI / 2, 0, (Math.sign(x * z) * Math.PI) / 4);
+  }
+  for (const x of [-0.16, 0.16]) add(rovBody,new THREE.CylinderGeometry(0.055, 0.055, 0.1, 8), black, x, 0.04, 0);
+  add(rovBody,new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshLambertMaterial({ color: 0x9fd8ff }), 0, 0.02, -0.25);
+
+  // the claw: an arm forward from the bottom of the frame, and two jaws
+  const claw = new THREE.Group();
+  claw.position.set(0, -0.13, -0.27);
+  rovModel.add(claw);
+  add(claw, new THREE.BoxGeometry(0.05, 0.04, 0.1), frame, 0, 0, -0.05);
+  for (const side of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(side * 0.03, 0, -0.1);
+    claw.add(pivot);
+    add(pivot, new THREE.BoxGeometry(0.02, 0.035, 0.1), flat(0xd0d4d8), 0, 0, -0.05);
+    pivot.userData.side = side;
+    jaws.push(pivot);
+  }
+  scene.add(rovModel);
+}
+
+const rov = {
+  position: new THREE.Vector3(),
+  velocity: new THREE.Vector3(),
+  heading: 0, // radians; 0 faces -z (towards the basket), positive turns left
+  turnRate: 0,
+  pitch: 0, // radians; positive is nose up
+  roll: 0, // radians; positive is right side up
+  attitude: new THREE.Quaternion(),
+  clawClosed: false,
+  clawAngle: 0.5,
+  held: null,
+};
+
+const euler = new THREE.Euler(0, 0, 0, "YXZ");
+function updateAttitude() {
+  rov.attitude.setFromEuler(euler.set(rov.pitch, rov.heading, rov.roll));
+}
+
+const tipWorld = new THREE.Vector3();
+function clawTip() {
+  return tipWorld.copy(CLAW_TIP).applyQuaternion(rov.attitude).add(rov.position);
+}
+
+// ---- game state ---------------------------------------------------------------
+
+let clock = 0;
+let running = false; // the clock waits for the first input
+let finished = false;
+let chaseCamera = true;
+let pitchFromTilt = true; // false: the ROV holds itself level in pitch (Y)
+
+function reset() {
+  rov.position.set(START.x, START.y, START.z);
+  rov.velocity.set(0, 0, 0);
+  rov.heading = START.heading;
+  rov.turnRate = 0;
+  rov.pitch = rov.roll = 0;
+  rov.clawClosed = false;
+  rov.held = null;
+  updateAttitude();
+  placeCrabsAtHome();
+  clock = 0;
+  running = false;
+  finished = false;
+  showMessage(null);
+  placeCamera(1);
+}
+
+function showMessage(html) {
+  const box = document.getElementById("message");
+  box.hidden = html === null;
+  if (html !== null) document.getElementById("message-text").innerHTML = html;
+}
+
+function collectedCount() {
+  return crabs.filter((c) => c.state === "collected").length;
+}
+
+function bestTime() {
+  try {
+    return Number(localStorage.getItem(`rov-sim-crabs-${CRAB_COUNT}`)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function finish() {
+  finished = true;
+  const best = bestTime();
+  const record = best === null || clock < best;
+  if (record) {
+    try {
+      localStorage.setItem(`rov-sim-crabs-${CRAB_COUNT}`, clock.toFixed(2));
+    } catch {}
+  }
+  showMessage(
+    `<strong>All ${CRAB_COUNT} crabs collected</strong><br>${clock.toFixed(1)} s` +
+      (record ? " &nbsp;-- best time!" : ` &nbsp;(best ${best.toFixed(1)} s)`) +
+      "<br>Start to try again",
+  );
+}
+
+// ---- physics ------------------------------------------------------------------
+
+const thrust = new THREE.Vector3();
+const push = new THREE.Vector3();
+const throughWater = new THREE.Vector3();
+
+function approach(angle, target, dt) {
+  const rate = THREE.MathUtils.clamp((target - angle) * ATTITUDE_GAIN, -ATTITUDE_RATE, ATTITUDE_RATE);
+  return angle + rate * dt;
+}
+
+function physics(pad, dt) {
+  const turn = pad.axes[0] || 0;
+  const forward = -(pad.axes[1] || 0);
+  const sideways = pad.axes[2] || 0;
+  const rise = -(pad.axes[3] || 0);
+  const rollIn = pad.axes[4] || 0;
+  const pitchIn = pad.axes[5] || 0;
+
+  if (!running && !finished) {
+    running = pad.axes.some((a) => Math.abs(a) > 0.05) || pad.buttons[0] || pad.buttons[1];
+  }
+
+  // turning has momentum; pitch and roll follow the tilt, like a ROV whose
+  // thrusters hold whatever angle it is told to
+  rov.turnRate += (-turn * TURN_ACCEL - TURN_DRAG * rov.turnRate) * dt;
+  rov.heading += rov.turnRate * dt;
+  // in level mode the ROV holds its nose level whatever the board does
+  const targetPitch = pitchFromTilt ? pitchIn * MAX_PITCH : 0;
+  const targetRoll = pitchFromTilt ? -rollIn * MAX_ROLL : 0;
+  rov.pitch = approach(rov.pitch, targetPitch, dt);
+  rov.roll = approach(rov.roll, targetRoll, dt);
+  updateAttitude();
+
+  // thrusters push along the ROV's OWN axes, so nose-down plus forward also dives
+  thrust.set(sideways * SIDEWAYS_ACCEL, rise * VERTICAL_ACCEL, -forward * FORWARD_ACCEL);
+  thrust.applyQuaternion(rov.attitude);
+  push.copy(thrust);
+  push.y += BUOYANCY;
+  push.addScaledVector(throughWater.subVectors(rov.velocity, CURRENT), -WATER_DRAG);
+  rov.velocity.addScaledVector(push, dt);
+  rov.position.addScaledVector(rov.velocity, dt);
+
+  keepInsidePool();
+  keepOutOfBasket();
+  workClaw(pad, dt);
+  moveCrabs(dt);
+
+  if (running && !finished) clock += dt;
+}
+
+function stop(axis, limit, isMax) {
+  const value = rov.position[axis];
+  if (isMax ? value > limit : value < limit) {
+    rov.position[axis] = limit;
+    const v = rov.velocity[axis];
+    if (isMax ? v > 0 : v < 0) rov.velocity[axis] = 0;
+  }
+}
+
+function keepInsidePool() {
+  stop("x", -HALF_W + ROV_RADIUS, false);
+  stop("x", HALF_W - ROV_RADIUS, true);
+  stop("z", -HALF_L + ROV_RADIUS, false);
+  stop("z", HALF_L - ROV_RADIUS, true);
+  stop("y", FLOOR + CLEARANCE, false);
+  stop("y", SURFACE, true);
+  // the claw tip reaches further than the body, so it gets its own floor check
+  const tip = clawTip();
+  const dig = FLOOR + 0.03 - tip.y;
+  if (dig > 0) {
+    rov.position.y += dig;
+    if (rov.velocity.y < 0) rov.velocity.y = 0;
+  }
+}
+
+function keepOutOfBasket() {
+  // the basket is solid: push the ROV out along the shallowest side
+  const half = BASKET.size / 2 + ROV_RADIUS;
+  const dx = rov.position.x - BASKET.x;
+  const dz = rov.position.z - BASKET.z;
+  const below = basketBottom - ROV_RADIUS;
+  const above = BASKET.top + ROV_RADIUS;
+  const y = rov.position.y;
+  if (Math.abs(dx) >= half || Math.abs(dz) >= half || y <= below || y >= above) return;
+  const outs = [
+    ["x", half - Math.abs(dx), Math.sign(dx) || 1],
+    ["z", half - Math.abs(dz), Math.sign(dz) || 1],
+    ["y", above - y, 1],
+    ["y", y - below, -1],
+  ];
+  outs.sort((a, b) => a[1] - b[1]);
+  const [axis, depth, direction] = outs[0];
+  rov.position[axis] += depth * direction;
+  if (rov.velocity[axis] * direction < 0) rov.velocity[axis] = 0;
+}
+
+function crabInReach() {
+  const tip = clawTip();
+  let best = null;
+  let bestDistance = GRAB_RADIUS;
+  for (const crab of crabs) {
+    if (crab.state !== "floor" && crab.state !== "sinking") continue;
+    const distance = crab.position.distanceTo(tip);
+    if (distance < bestDistance) {
+      best = crab;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function workClaw(pad, dt) {
+  if (pad.buttons[0] && !rov.clawClosed) {
+    rov.clawClosed = true;
+    const crab = crabInReach();
+    if (crab) {
+      crab.state = "held";
+      rov.held = crab;
+    }
+  } else if (pad.buttons[1] && rov.clawClosed) {
+    rov.clawClosed = false;
+    if (rov.held) {
+      rov.held.state = "sinking";
+      rov.held = null;
+    }
+  }
+  const target = rov.clawClosed ? (rov.held ? 0.18 : 0.02) : 0.5;
+  const step = CLAW_SPEED * dt;
+  rov.clawAngle += THREE.MathUtils.clamp(target - rov.clawAngle, -step, step);
+}
+
+function moveCrabs(dt) {
+  for (const crab of crabs) {
+    if (crab.state === "held") {
+      crab.position.copy(clawTip());
+      crab.position.y -= 0.02;
+    } else if (crab.state === "sinking") {
+      crab.position.y -= SINK_SPEED * dt;
+      const wasAboveBasketFloor = crab.position.y + SINK_SPEED * dt > basketBottom;
+      if (insideBasket(crab.position.x, crab.position.z, 0.06) && wasAboveBasketFloor &&
+          crab.position.y <= basketBottom + CRAB_HALF_HEIGHT) {
+        crab.position.y = basketBottom + 0.02 + CRAB_HALF_HEIGHT;
+        crab.state = "collected";
+        if (collectedCount() === crabs.length && !finished) finish();
+      } else if (crab.position.y <= FLOOR + CRAB_HALF_HEIGHT) {
+        crab.position.y = FLOOR + CRAB_HALF_HEIGHT;
+        crab.state = "floor";
+      }
+    }
+  }
+}
+
+// ---- camera and drawing -------------------------------------------------------
+
+const ahead = new THREE.Vector3();
+const chaseSpot = new THREE.Vector3();
+const lookSpot = new THREE.Vector3();
+const lookDown = new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-20), 0, 0));
+const ONBOARD_CAMERA = new THREE.Vector3(0, 0.03, -0.22);
+
+function placeCamera(blend) {
+  if (chaseCamera) {
+    ahead.set(-Math.sin(rov.heading), 0, -Math.cos(rov.heading));
+    chaseSpot.copy(rov.position).addScaledVector(ahead, -1.9);
+    chaseSpot.y += 0.85;
+    camera.position.lerp(chaseSpot, blend);
+    // never let the camera end up behind a wall, where it would see nothing
+    camera.position.x = THREE.MathUtils.clamp(camera.position.x, -HALF_W + 0.1, HALF_W - 0.1);
+    camera.position.z = THREE.MathUtils.clamp(camera.position.z, -HALF_L + 0.1, HALF_L - 0.1);
+    camera.position.y = THREE.MathUtils.clamp(camera.position.y, FLOOR + 0.1, -0.1);
+    lookSpot.copy(rov.position).addScaledVector(ahead, 1.0);
+    lookSpot.y -= 0.25;
+    camera.lookAt(lookSpot);
+  } else {
+    // the pilot's real view: fixed to the ROV, tipped down to see the claw
+    camera.position.copy(ONBOARD_CAMERA).applyQuaternion(rov.attitude).add(rov.position);
+    camera.quaternion.copy(rov.attitude).multiply(lookDown);
+  }
+  // onboard, the claw stays in view the way it does on a real ROV's camera
+  rovBody.visible = chaseCamera;
+}
+
+function drawRov() {
+  rovModel.position.copy(rov.position);
+  rovModel.quaternion.copy(rov.attitude);
+  for (const jaw of jaws) jaw.rotation.y = jaw.userData.side * -rov.clawAngle;
+  for (const crab of crabs) {
+    crab.mesh.position.copy(crab.position);
+    if (crab.state === "held") crab.mesh.rotation.set(0, rov.heading, 0);
+  }
+}
+
+function drawSnow(time) {
+  const p = snowGeometry.attributes.position.array;
+  const half = SNOW_BOX / 2;
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  const dy = -0.02 * time;
+  for (let i = 0; i < p.length; i += 3) {
+    p[i] = cx + ((((snowHome[i] - cx) % SNOW_BOX) + SNOW_BOX) % SNOW_BOX) - half;
+    p[i + 1] = cy + ((((snowHome[i + 1] + dy - cy) % SNOW_BOX) + SNOW_BOX) % SNOW_BOX) - half;
+    p[i + 2] = cz + ((((snowHome[i + 2] - cz) % SNOW_BOX) + SNOW_BOX) % SNOW_BOX) - half;
+  }
+  snowGeometry.attributes.position.needsUpdate = true;
+}
+
+let resolutionIndex = 1;
+try {
+  const saved = localStorage.getItem("rov-sim-resolution");
+  if (saved !== null && Number(saved) >= 0 && Number(saved) < RESOLUTIONS.length) {
+    resolutionIndex = Number(saved);
+  }
+} catch {}
+
+function applyResolution() {
+  const choice = RESOLUTIONS[resolutionIndex];
+  const box = canvas.getBoundingClientRect();
+  const [w, h] = choice || [Math.round(box.width * devicePixelRatio), Math.round(box.height * devicePixelRatio)];
+  renderer.setSize(w, h, false);
+  try {
+    localStorage.setItem("rov-sim-resolution", resolutionIndex);
+  } catch {}
+}
+addEventListener("resize", applyResolution);
+addEventListener("keydown", (e) => {
+  if (e.code === "KeyQ" && !e.repeat) {
+    resolutionIndex = (resolutionIndex + 1) % RESOLUTIONS.length;
+    applyResolution();
+  }
+});
+
+const gpu = (() => {
+  const gl = renderer.getContext();
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  const name = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+  return String(name).replace(/^ANGLE \((.*)\)$/, "$1").slice(0, 60);
+})();
+
+const flightPanel = document.getElementById("flight");
+const perfPanel = document.getElementById("perf");
+let frames = 0;
+let frameTime = 0;
+let windowStart = performance.now();
+let fps = 0;
+let averageMs = 0;
+
+const degrees = (radians) => (radians * 180) / Math.PI;
+
+function clawText() {
+  if (rov.held) return "holding a crab";
+  if (rov.clawClosed) return "closed";
+  return crabInReach() ? "open -- crab in reach" : "open";
+}
+
+function updatePanels(pad) {
+  const compass = ((-degrees(rov.heading) % 360) + 360) % 360;
+  flightPanel.textContent =
+    `depth    ${(-rov.position.y).toFixed(1)} m\n` +
+    `heading  ${compass.toFixed(0).padStart(3, "0")}\n` +
+    `pitch    ${degrees(rov.pitch).toFixed(0).padStart(4)}  ${pitchFromTilt ? "tilt" : "level"}\n` +
+    `roll     ${degrees(-rov.roll).toFixed(0).padStart(4)}\n` +
+    `claw     ${clawText()}\n` +
+    `crabs    ${collectedCount()} / ${crabs.length}\n` +
+    `time     ${clock.toFixed(1)} s\n` +
+    `camera   ${chaseCamera ? "chase" : "onboard"}`;
+  perfPanel.textContent =
+    `${fps.toFixed(0)} fps  ${averageMs.toFixed(1)} ms of script\n` +
+    `${canvas.width}x${canvas.height}  ${(renderer.info.render.triangles / 1000).toFixed(1)}k tris  ` +
+    `${renderer.info.render.calls} calls\n` +
+    `${gpu}\n` +
+    `controls: ${pad.source}`;
+}
+
+// ---- main loop ----------------------------------------------------------------
+
+let last = performance.now();
+let owed = 0;
+let panelsShown = 0;
+const started = performance.now();
+
+// for poking at the sim from the browser console
+window.sim = {
+  rov,
+  crabs,
+  reset,
+  clawTip,
+  camera,
+  jaws,
+  setChaseCamera(on) {
+    chaseCamera = on;
+    placeCamera(1);
+  },
+  get collected() { return collectedCount(); },
+  get finished() { return finished; },
+  get clock() { return clock; },
+  get pitchFromTilt() { return pitchFromTilt; },
+  get chaseCamera() { return chaseCamera; },
+  // run the physics on made-up inputs: sim.fly([0, -1, 0, 0, 0, 0], 3, [0])
+  fly(axes, seconds, pressed = []) {
+    const pad = { axes: [...axes, 0, 0, 0, 0, 0, 0].slice(0, 6), buttons: new Array(16).fill(false) };
+    for (const b of pressed) pad.buttons[b] = true;
+    for (let t = 0; t < seconds; t += PHYSICS_STEP) physics(pad, PHYSICS_STEP);
+  },
+};
+
+function frame(now) {
+  const work = performance.now();
+  const pad = Pad.update();
+  if (Pad.justPressed(9)) reset();
+  if (Pad.justPressed(2)) chaseCamera = !chaseCamera;
+  if (Pad.justPressed(3)) pitchFromTilt = !pitchFromTilt;
+
+  owed = Math.min(owed + (now - last) / 1000, 0.25);
+  last = now;
+  while (owed >= PHYSICS_STEP) {
+    physics(pad, PHYSICS_STEP);
+    owed -= PHYSICS_STEP;
+  }
+
+  drawRov();
+  placeCamera(1 - Math.exp(-4 / 60));
+  drawSnow((now - started) / 1000);
+  renderer.render(scene, camera);
+
+  frames++;
+  frameTime += performance.now() - work;
+  if (now - windowStart > 500) {
+    fps = (frames * 1000) / (now - windowStart);
+    averageMs = frameTime / frames;
+    frames = 0;
+    frameTime = 0;
+    windowStart = now;
+  }
+  if (now - panelsShown > 100) {
+    updatePanels(pad); // ten times a second is plenty for numbers
+    panelsShown = now;
+  }
+  requestAnimationFrame(frame);
+}
+
+applyResolution();
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

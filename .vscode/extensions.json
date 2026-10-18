@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-vscode.vscode-serial-monitor",
+    "emeraldwalk.runonsave",
+    "charliermarsh.ruff",
+    "spmeesseman.vscode-taskexplorer"
+  ]
+}

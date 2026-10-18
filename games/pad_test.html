@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Controller Check</title>
+<style>
+  [hidden] { display: none !important; }
+  :root { --page: #0b1020; --panel: #151d33; --text: #e8ecf4; --dim: #8a93a8; --on: #ffcf4a; --ring: #3fb6a8; }
+  body { margin: 0; padding: 16px; background: var(--page); color: var(--text); font: 16px system-ui, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p { color: var(--dim); margin: 0 0 16px; }
+  .sticks { display: flex; gap: 24px; flex-wrap: wrap; }
+  .stick { background: var(--panel); border-radius: 10px; padding: 12px; text-align: center; }
+  .stick svg { width: 160px; height: 160px; display: block; }
+  .stick code { color: var(--dim); font: 14px ui-monospace, monospace; }
+  .buttons { display: grid; grid-template-columns: repeat(8, minmax(0, 64px)); gap: 6px; margin-top: 16px; }
+  .button { background: var(--panel); border-radius: 6px; padding: 6px 0; text-align: center; font: 12px ui-monospace, monospace; color: var(--dim); }
+  .button.on { background: var(--on); color: #000; }
+  #source { font: 14px ui-monospace, monospace; color: var(--dim); margin-top: 16px; }
+</style>
+</head>
+<body>
+<h1>Controller check</h1>
+<div class="sticks">
+  <div class="stick"><svg viewBox="-1.2 -1.2 2.4 2.4"><circle r="1" fill="none" stroke="var(--ring)" stroke-width="0.03"/><line x1="-1" x2="1" stroke="var(--dim)" stroke-width="0.01"/><line y1="-1" y2="1" stroke="var(--dim)" stroke-width="0.01"/><circle id="left-dot" r="0.12" fill="var(--on)"/></svg><div>Left stick</div><code id="left-text"></code></div>
+  <div class="stick"><svg viewBox="-1.2 -1.2 2.4 2.4"><circle r="1" fill="none" stroke="var(--ring)" stroke-width="0.03"/><line x1="-1" x2="1" stroke="var(--dim)" stroke-width="0.01"/><line y1="-1" y2="1" stroke="var(--dim)" stroke-width="0.01"/><circle id="right-dot" r="0.12" fill="var(--on)"/></svg><div>Right stick</div><code id="right-text"></code></div>
+  <div class="stick"><svg viewBox="-1.2 -1.2 2.4 2.4"><circle r="1" fill="none" stroke="var(--ring)" stroke-width="0.03"/><line x1="-1" x2="1" stroke="var(--dim)" stroke-width="0.01"/><line y1="-1" y2="1" stroke="var(--dim)" stroke-width="0.01"/><circle id="tilt-dot" r="0.12" fill="var(--on)"/></svg><div>Tilt</div><code id="tilt-text"></code></div>
+</div>
+<div class="buttons" id="buttons"></div>
+<div id="source"></div>
+<script src="pad.js"></script>
+<script>
+const NAMES = ["A", "B", "X", "Y", "LB", "RB", "LT", "RT", "Back", "Start", "L click", "R click", "Up", "Down", "Left", "Right"];
+const grid = document.getElementById("buttons");
+const cells = NAMES.map((name, i) => {
+  const cell = document.createElement("div");
+  cell.className = "button";
+  cell.textContent = `${i} ${name}`;
+  grid.append(cell);
+  return cell;
+});
+const show = (id, x, y) => {
+  document.getElementById(id + "-dot").setAttribute("cx", x);
+  document.getElementById(id + "-dot").setAttribute("cy", y);
+  document.getElementById(id + "-text").textContent = `${x.toFixed(3)}  ${y.toFixed(3)}`;
+};
+function frame() {
+  const pad = Pad.update();
+  show("left", pad.axes[0], pad.axes[1]);
+  show("right", pad.axes[2], pad.axes[3]);
+  show("tilt", pad.axes[4], pad.axes[5]);
+  pad.buttons.forEach((on, i) => cells[i].classList.toggle("on", on));
+  document.getElementById("source").textContent =
+    pad.source === "none" ? "no controller yet" : `${pad.source}: ${pad.name}`;
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

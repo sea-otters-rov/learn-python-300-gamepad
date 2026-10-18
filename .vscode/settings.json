@@ -1,0 +1,101 @@
+{
+  // ---------------------------------------------------------------------------
+  // Save = deploy.
+  //
+  // Ctrl+S runs tools\sync.py, which copies the file onto the XIAO, and
+  // CircuitPython restarts code.py when it sees the write.
+  //
+  // onFocusChange, NOT afterDelay: afterDelay fires on every pause in typing
+  // and would push half-written files to the board mid-edit. onFocusChange only
+  // fires once you leave the editor, and still cannot lose work.
+  // ---------------------------------------------------------------------------
+  "files.autoSave": "onFocusChange",
+
+  // CircuitPython does not skip a UTF-8 BOM. Be explicit, not trusting.
+  "files.encoding": "utf8",
+
+  "emeraldwalk.runonsave": {
+    "commands": [
+      {
+        "match": "board[\\\\/].*\\.(py|toml|json|txt|bmp|wav|mp3)$",
+        "notMatch": "__pycache__",
+        "cmd": "\"${workspaceFolder}\\.venv\\Scripts\\python.exe\" \"${workspaceFolder}\\tools\\sync.py\" \"${file}\"",
+        "autoShowOutputPanel": "error"
+      }
+    ]
+  },
+
+  // ---------------------------------------------------------------------------
+  // IntelliSense for CircuitPython: .venv holds stubs pinned to the firmware,
+  // and board\ is the board's root, so imports resolve here the way they do on
+  // the board. board\lib is plain .py, which Pylance reads directly.
+  // ---------------------------------------------------------------------------
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+  "python.analysis.extraPaths": ["${workspaceFolder}/board", "${workspaceFolder}/board/lib"],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingModuleSource": "none"
+  },
+
+  // Port is picked in the Serial Monitor panel; USB CDC ignores baud.
+  // NOT "None": with no line ending an empty Enter sends nothing, and a
+  // program waiting on input() hangs.
+  "vscode-serial-monitor.lineEnding": "\r\n",
+
+  // ---------------------------------------------------------------------------
+  // Task Explorer: only tasks.json is listed. Every other provider is off so a
+  // student cannot click a board .py file and run it on the laptop, where
+  // `board` does not exist. This object replaces the default wholesale.
+  // ---------------------------------------------------------------------------
+  "taskexplorer.enableSideBar": true,
+  "taskexplorer.enabledTasks": {
+    "ant": false,
+    "apppublisher": false,
+    "bash": false,
+    "batch": false,
+    "composer": false,
+    "eslint": false,
+    "gradle": false,
+    "grunt": false,
+    "gulp": false,
+    "jenkins": false,
+    "laravel": false,
+    "make": false,
+    "maven": false,
+    "nodejs": false,
+    "npm": false,
+    "nsis": false,
+    "perl": false,
+    "pipenv": false,
+    "powershell": false,
+    "python": false,
+    "ruby": false,
+    "tsc": false,
+    "webpack": false,
+    "webpackwrap": false,
+    "workspace": true
+  },
+
+  // ---------------------------------------------------------------------------
+  // Formatting: Ruff, FORMAT only. No codeActionsOnSave fixAll -- see ruff.toml
+  // for why that would delete board\code.py's only line. formatOnSave only runs
+  // because autoSave is onFocusChange; VS Code skips it under afterDelay.
+  // ---------------------------------------------------------------------------
+  "[python]": {
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.rulers": [88],
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true
+  },
+
+  "files.exclude": {
+    "**/__pycache__": true
+  },
+  "files.watcherExclude": {
+    "**/.venv/**": true
+  },
+  "search.exclude": {
+    ".venv": true
+  }
+}

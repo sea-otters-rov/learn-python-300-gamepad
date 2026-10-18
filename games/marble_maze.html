@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marble Maze</title>
+<style>
+  :root {
+    --page: #0b1020;
+    --text: #e8ecf4;
+    --dim: #8a93a8;
+    --accent: #ffcf4a;
+  }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--page);
+    color: var(--text);
+    font: 16px system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    overflow: hidden;
+  }
+  #hud {
+    width: min(96vw, calc((100vh - 90px) * 16 / 9));
+    display: flex;
+    justify-content: space-between;
+    font: 15px ui-monospace, monospace;
+    color: var(--dim);
+  }
+  #hud b { color: var(--text); font-weight: 600; }
+  canvas {
+    width: min(96vw, calc((100vh - 90px) * 16 / 9));
+    aspect-ratio: 16 / 9;
+    image-rendering: pixelated;
+    border-radius: 6px;
+  }
+  #message {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  #message div {
+    background: #000b;
+    padding: 18px 26px;
+    border-radius: 10px;
+    text-align: center;
+    line-height: 1.5;
+  }
+  #message strong { color: var(--accent); font-size: 1.3em; }
+  #help { color: var(--dim); font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span>Level <b id="level">1</b> <span id="title"></span></span>
+  <span>Time <b id="time">0.0</b> s &nbsp; Falls <b id="falls">0</b></span>
+  <span id="source">no controller</span>
+</div>
+<canvas id="screen" width="320" height="180"></canvas>
+<div id="help">Tilt the board to roll the marble. A restarts the level. I shows what the game receives.</div>
+<div id="message" hidden><div id="message-text"></div></div>
+<script src="pad.js"></script>
+<script>
+// Marble Maze -- the left stick is gravity. Nothing else.
+//
+// The game takes axes 0 and 1 exactly as sent: no dead zone, no smoothing. A
+// board that is not quite level makes the marble creep, and fixing that is the
+// student's job on the board side, not the game's.
+
+const TILE = 20;
+const COLUMNS = 16;
+const ROWS = 9;
+const BALL_RADIUS = 5;
+
+const FULL_STICK_ACCEL = 420; // px/s^2 when the stick is all the way over
+const ROLLING_DRAG = 0.6; // fraction of speed lost per second
+const BOUNCE = 0.35; // fraction of speed kept off a wall
+const HOLE_PULL_RADIUS = 7; // centre this close to a hole's centre: it falls
+const GOAL_RADIUS = 7;
+const STEP = 1 / 120; // physics step in seconds
+const TOP_SPEED = 480; // px/s; 4 px a step, under the 5 px radius, so the
+                       // marble can never step clean through a wall
+
+// '#' wall   'O' hole   'S' start   'G' goal   '.' floor
+const LEVELS = [
+  {
+    title: "Warm up",
+    map: [
+      "################",
+      "#S.....#.......#",
+      "#......#.......#",
+      "#..##..#..###..#",
+      "#..#......#....#",
+      "#..#..#####..###",
+      "#..#.........#G#",
+      "#....#.........#",
+      "################",
+    ],
+  },
+  {
+    title: "Mind the holes",
+    map: [
+      "################",
+      "#S...O.........#",
+      "#....O..O...O..#",
+      "#.......O......#",
+      "####.####..O####",
+      "#........O.....#",
+      "#..O.......O...#",
+      "#.....O......OG#",
+      "################",
+    ],
+  },
+  {
+    title: "Narrow channels",
+    map: [
+      "################",
+      "#S#....O.....#.#",
+      "#.#.##...###.#.#",
+      "#.#..#O#.#...#.#",
+      "#.##.#.#.#.###.#",
+      "#....#.#...#...#",
+      "####.#.#####.#.#",
+      "#O...........#G#",
+      "################",
+    ],
+  },
+  {
+    title: "The long way round",
+    map: [
+      "################",
+      "#S.O.....O.....#",
+      "#.####.#####.#.#",
+      "#.#..O.#...#.#.#",
+      "#.#.####.#.#.#O#",
+      "#...#..O.#...#.#",
+      "###.#.####O###.#",
+      "#G..O..........#",
+      "################",
+    ],
+  },
+];
+
+const canvas = document.getElementById("screen");
+const ctx = canvas.getContext("2d");
+const background = document.createElement("canvas");
+background.width = canvas.width;
+background.height = canvas.height;
+
+const hud = {
+  level: document.getElementById("level"),
+  title: document.getElementById("title"),
+  time: document.getElementById("time"),
+  falls: document.getElementById("falls"),
+  source: document.getElementById("source"),
+  message: document.getElementById("message"),
+  messageText: document.getElementById("message-text"),
+};
+
+const COLORS = {
+  floor: "#1b2a4a",
+  floorDot: "#22345a",
+  wall: "#3fb6a8",
+  wallEdge: "#2a7f76",
+  hole: "#05070d",
+  holeRim: "#0f1729",
+  goal: "#ffcf4a",
+  ball: "#f2f4f8",
+  ballShade: "#b8c0d0",
+};
+
+let levelIndex = 0;
+let level = null; // { walls: Set, holes: [], start, goal }
+let ball = { x: 0, y: 0, vx: 0, vy: 0, scale: 1 };
+let mode = "playing"; // "playing", "falling", "won", "finished"
+let clock = 0;
+let falls = 0;
+let fallTimer = 0;
+
+function bestTimes() {
+  try {
+    return JSON.parse(localStorage.getItem("marble-maze-best") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveBest(index, seconds) {
+  const best = bestTimes();
+  if (!(best[index] <= seconds)) {
+    best[index] = seconds;
+    try {
+      localStorage.setItem("marble-maze-best", JSON.stringify(best));
+    } catch {}
+    return true;
+  }
+  return false;
+}
+
+function centre(column, row) {
+  return { x: column * TILE + TILE / 2, y: row * TILE + TILE / 2 };
+}
+
+function parse(map) {
+  const parsed = { walls: new Set(), holes: [], start: null, goal: null };
+  map.forEach((line, row) => {
+    if (line.length !== COLUMNS) throw new Error(`row ${row} is ${line.length} wide`);
+    [...line].forEach((cell, column) => {
+      if (cell === "#") parsed.walls.add(row * COLUMNS + column);
+      if (cell === "O") parsed.holes.push(centre(column, row));
+      if (cell === "S") parsed.start = centre(column, row);
+      if (cell === "G") parsed.goal = centre(column, row);
+    });
+  });
+  return parsed;
+}
+
+function isWall(column, row) {
+  if (column < 0 || row < 0 || column >= COLUMNS || row >= ROWS) return true;
+  return level.walls.has(row * COLUMNS + column);
+}
+
+function startLevel(index) {
+  levelIndex = index;
+  level = parse(LEVELS[index].map);
+  drawBackground();
+  hud.level.textContent = index + 1;
+  hud.title.textContent = "-- " + LEVELS[index].title;
+  clock = 0;
+  falls = 0;
+  respawn();
+  mode = "playing";
+  showMessage(null);
+}
+
+function respawn() {
+  ball = { x: level.start.x, y: level.start.y, vx: 0, vy: 0, scale: 1 };
+}
+
+function drawBackground() {
+  const g = background.getContext("2d");
+  g.fillStyle = COLORS.floor;
+  g.fillRect(0, 0, background.width, background.height);
+  g.fillStyle = COLORS.floorDot;
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLUMNS; x++) g.fillRect(x * TILE + 9, y * TILE + 9, 2, 2);
+  }
+  for (let row = 0; row < ROWS; row++) {
+    for (let column = 0; column < COLUMNS; column++) {
+      if (!isWall(column, row)) continue;
+      g.fillStyle = COLORS.wallEdge;
+      g.fillRect(column * TILE, row * TILE, TILE, TILE);
+      g.fillStyle = COLORS.wall;
+      g.fillRect(column * TILE, row * TILE, TILE, TILE - 3);
+    }
+  }
+  for (const hole of level.holes) {
+    disc(g, hole.x, hole.y, 8, COLORS.holeRim);
+    disc(g, hole.x, hole.y, 6.5, COLORS.hole);
+  }
+  disc(g, level.goal.x, level.goal.y, 8, COLORS.goal);
+  disc(g, level.goal.x, level.goal.y, 4, COLORS.floor);
+}
+
+function disc(g, x, y, r, color) {
+  g.fillStyle = color;
+  g.beginPath();
+  g.arc(x, y, r, 0, Math.PI * 2);
+  g.fill();
+}
+
+function collideWithWalls() {
+  const left = Math.floor((ball.x - BALL_RADIUS) / TILE);
+  const right = Math.floor((ball.x + BALL_RADIUS) / TILE);
+  const top = Math.floor((ball.y - BALL_RADIUS) / TILE);
+  const bottom = Math.floor((ball.y + BALL_RADIUS) / TILE);
+  for (let row = top; row <= bottom; row++) {
+    for (let column = left; column <= right; column++) {
+      if (!isWall(column, row)) continue;
+      // nearest point of this wall tile to the marble's centre
+      const nearX = Math.max(column * TILE, Math.min(ball.x, column * TILE + TILE));
+      const nearY = Math.max(row * TILE, Math.min(ball.y, row * TILE + TILE));
+      const dx = ball.x - nearX;
+      const dy = ball.y - nearY;
+      const distance = Math.hypot(dx, dy);
+      if (distance >= BALL_RADIUS || distance === 0) continue;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      ball.x = nearX + nx * BALL_RADIUS;
+      ball.y = nearY + ny * BALL_RADIUS;
+      const into = ball.vx * nx + ball.vy * ny;
+      if (into < 0) {
+        ball.vx -= (1 + BOUNCE) * into * nx;
+        ball.vy -= (1 + BOUNCE) * into * ny;
+      }
+    }
+  }
+}
+
+function physics(stickX, stickY) {
+  ball.vx += stickX * FULL_STICK_ACCEL * STEP;
+  ball.vy += stickY * FULL_STICK_ACCEL * STEP;
+  const drag = 1 - ROLLING_DRAG * STEP;
+  ball.vx *= drag;
+  ball.vy *= drag;
+  const speed = Math.hypot(ball.vx, ball.vy);
+  if (speed > TOP_SPEED) {
+    ball.vx *= TOP_SPEED / speed;
+    ball.vy *= TOP_SPEED / speed;
+  }
+  ball.x += ball.vx * STEP;
+  ball.y += ball.vy * STEP;
+  collideWithWalls();
+
+  for (const hole of level.holes) {
+    if (Math.hypot(ball.x - hole.x, ball.y - hole.y) < HOLE_PULL_RADIUS) {
+      ball.x = hole.x;
+      ball.y = hole.y;
+      mode = "falling";
+      fallTimer = 0;
+      falls++;
+      return;
+    }
+  }
+  if (Math.hypot(ball.x - level.goal.x, ball.y - level.goal.y) < GOAL_RADIUS) {
+    win();
+  }
+}
+
+function win() {
+  const record = saveBest(levelIndex, clock);
+  const last = levelIndex === LEVELS.length - 1;
+  mode = last ? "finished" : "won";
+  showMessage(
+    `<strong>${last ? "All levels done!" : "Level " + (levelIndex + 1) + " done"}</strong><br>` +
+      `${clock.toFixed(1)} s, ${falls} fall${falls === 1 ? "" : "s"}` +
+      (record ? " &nbsp;-- best time!" : ` &nbsp;(best ${bestTimes()[levelIndex].toFixed(1)} s)`) +
+      `<br>Press A to ${last ? "start again" : "go on"}`
+  );
+}
+
+function showMessage(html) {
+  hud.message.hidden = html === null;
+  if (html !== null) hud.messageText.innerHTML = html;
+}
+
+function tick(seconds, pad) {
+  if (Pad.justPressed(0)) {
+    if (mode === "won") return startLevel(levelIndex + 1);
+    if (mode === "finished") return startLevel(0);
+    return startLevel(levelIndex);
+  }
+  if (mode === "playing") {
+    clock += seconds;
+    physics(pad.axes[0], pad.axes[1]);
+  } else if (mode === "falling") {
+    fallTimer += seconds;
+    ball.scale = Math.max(0, 1 - fallTimer / 0.35);
+    if (fallTimer > 0.6) {
+      respawn();
+      mode = "playing";
+    }
+  }
+}
+
+function draw() {
+  ctx.drawImage(background, 0, 0);
+  const r = BALL_RADIUS * ball.scale;
+  if (r > 0.3) {
+    disc(ctx, ball.x, ball.y, r, COLORS.ballShade);
+    disc(ctx, ball.x - r * 0.15, ball.y - r * 0.15, r * 0.8, COLORS.ball);
+  }
+  hud.time.textContent = clock.toFixed(1);
+  hud.falls.textContent = falls;
+}
+
+function showSource(pad) {
+  const text =
+    pad.source === "gamepad"
+      ? "board connected"
+      : pad.source === "keyboard"
+        ? "arrow keys"
+        : "tap the board to connect";
+  if (hud.source.textContent !== text) hud.source.textContent = text;
+}
+
+// Fixed physics steps, drawn once per screen refresh: a slow laptop draws
+// less often but the marble rolls at the same speed.
+let last = performance.now();
+let owed = 0;
+function frame(now) {
+  owed = Math.min(owed + (now - last) / 1000, 0.25);
+  last = now;
+  while (owed >= STEP) {
+    tick(STEP, Pad.update());
+    owed -= STEP;
+  }
+  showSource(Pad.state);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+startLevel(0);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

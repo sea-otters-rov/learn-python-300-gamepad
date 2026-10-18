@@ -1,0 +1,22 @@
+# Libraries in board\lib, as circup module names. A maintainer job: students
+# never run circup, and tools\setup.ps1 does not either -- board\lib is
+# committed, so a fresh clone already has exactly these.
+#
+# To add or update one, install into the repo (not onto the board), as plain
+# .py so the source stays readable:
+#
+#   .\.venv\Scripts\circup.exe --path .\board --board-id seeeduino_xiao_rp2350 `
+#       --cpy-version 10.3.1 install --py -r device-requirements.txt
+#
+# THEN DELETE board\lib\adafruit_bus_device. circup installs it as a
+# dependency, but it is built into this board's firmware, and a copy in lib\ is
+# loaded instead of the built-in one. Then full-sync with tools\sync.ps1.
+
+adafruit_ads1x15
+adafruit_adxl34x
+adafruit_bmp280
+
+# NOT installed by circup: the SEN0140 drivers imu.py, imu_calibration.py,
+# itg3205.py and qmc5883.py. They come from
+# https://github.com/m5m1th/sen0140-circuitpython (version 0.2.0) and are
+# copied into board\lib by hand.

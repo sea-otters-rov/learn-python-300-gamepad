@@ -1,0 +1,17 @@
+# Config for the Ruff extension, which tools\setup.ps1 installs on every
+# machine: the width format-on-save wraps at, and the lint rules.
+
+# Match editor.rulers in .vscode\settings.json. Top-level ON PURPOSE: a key
+# written after a [table] header belongs to that table.
+line-length = 88
+
+[lint]
+# Select explicitly -- ruff's default rule set changes between releases.
+# F is pyflakes (real mistakes); E4/E7/E9 are the pycodestyle errors that are
+# not matters of taste. Students have this extension too, so it underlines
+# their files: keep it to rules a beginner should actually act on.
+select = ["E4", "E7", "E9", "F"]
+# board\code.py imports a module only to run it. F401 would call that import
+# unused, and a fix pass would delete the one line that makes the board do
+# anything. Never add codeActionsOnSave fixAll for the same reason.
+ignore = ["F401"]

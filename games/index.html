@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gamepad Games</title>
+<style>
+  :root { --page: #0b1020; --panel: #151d33; --text: #e8ecf4; --dim: #8a93a8; --accent: #ffcf4a; }
+  body { margin: 0; padding: 24px 16px; background: var(--page); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  p { color: var(--dim); margin: 0 0 20px; }
+  a.card { display: block; background: var(--panel); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; color: var(--text); text-decoration: none; }
+  a.card:hover, a.card:focus { outline: 2px solid var(--accent); }
+  a.card strong { display: block; font-size: 18px; }
+  a.card span { color: var(--dim); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gamepad games</h1>
+  <p>
+    Plug in your board, open a game, and press any button on the board so the
+    browser can see it.
+  </p>
+  <a class="card" href="pad_test.html">
+    <strong>Controller check</strong>
+    <span>See exactly what your board is sending: both sticks, tilt, and every button.</span>
+  </a>
+  <a class="card" href="marble_maze.html">
+    <strong>Marble Maze</strong>
+    <span>Roll a marble through four mazes. Useful intro when all we have is tilt.</span>
+  </a>
+  <a class="card" href="rov_sim.html">
+    <strong>ROV Sim</strong>
+    <span>Pilot an underwater robot around a pool, grab five crabs with the claw, and drop them in the basket.</span>
+  </a>
+</main>
+</body>
+</html>

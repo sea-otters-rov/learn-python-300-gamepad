@@ -1,0 +1,14 @@
+# Host-side tooling. Installed into .venv by tools\setup.ps1.
+
+# Library manager for CircuitPython boards. Maintainer use only; see
+# device-requirements.txt.
+circup==3.0.4
+
+# Type stubs for the built-in modules (board, busio, usb_hid, ...).
+# PIN THIS TO THE FIRMWARE VERSION the XIAO runs (see boot_out.txt on the
+# board) and to $CpyVersion in tools\setup.ps1 -- stubs are generated per
+# release, and a mismatch means autocomplete quietly lies.
+circuitpython-stubs==10.3.1
+
+# Serial console and the board tools in tools\.
+pyserial>=3.5
