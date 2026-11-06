@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python in the browser: spike</title>
+<style>
+  body { font: 14px ui-monospace, monospace; background: #111; color: #ddd; margin: 16px; }
+  h1 { font-size: 16px; }
+  .bar { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .bar span { width: 130px; }
+  .track { position: relative; width: 300px; height: 14px; background: #333; }
+  .fill { position: absolute; top: 0; bottom: 0; background: #4c9; }
+  #error { white-space: pre-wrap; color: #f88; }
+  #stats { white-space: pre; color: #9cf; }
+</style>
+</head>
+<body>
+<h1>MicroPython in the browser -- spike</h1>
+<p>Runs <code>pilot.py</code> every frame. Arrows / W S are the sticks without a board.
+Save <code>pilot.py</code> or <code>cube.py</code> and it reloads in place.</p>
+<div id="stats">loading...</div>
+<div id="bars"></div>
+<div id="error"></div>
+<script src="../../games/pad.js"></script>
+<script type="module">
+import { loadMicroPython } from "https://cdn.jsdelivr.net/npm/@micropython/micropython-webassembly-pyscript@1.27.0/micropython.mjs";
+
+const THRUSTER_NAMES = [
+  "up front left", "up front right", "up back left", "up back right",
+  "forward left", "forward right", "side front", "side back",
+];
+const STUDENT_FILES = ["cube.py", "pilot.py"];
+const HERE = "spikes/browser_python/";
+
+// The part students never see: Python-side objects, so a student's attribute
+// reads and thrust() calls never cross into JS. JS crosses once per step.
+const HARNESS = `
+import sys
+
+class Pad:
+    def __init__(self):
+        self.left_x = self.left_y = 0.0
+        self.right_x = self.right_y = 0.0
+        self.tilt_x = self.tilt_y = 0.0
+
+class Rov:
+    def __init__(self, count):
+        self.commands = [0.0] * count
+        self.pitch = self.roll = 0.0
+
+    def thrust(self, thruster, power):
+        self.commands[thruster] = power
+
+_pad = Pad()
+_rov = Rov(8)
+_pilot = None
+
+def _load():
+    global _pilot
+    for name in ("pilot", "cube"):
+        sys.modules.pop(name, None)
+    import pilot
+    _pilot = pilot.pilot
+
+def _step(lx, ly, rx, ry, tx, ty):
+    _pad.left_x, _pad.left_y = lx, ly
+    _pad.right_x, _pad.right_y = rx, ry
+    _pad.tilt_x, _pad.tilt_y = tx, ty
+    for i in range(len(_rov.commands)):
+        _rov.commands[i] = 0.0
+    _pilot(_pad, _rov)
+    return ",".join(str(c) for c in _rov.commands)
+`;
+
+const stats = document.getElementById("stats");
+const errorBox = document.getElementById("error");
+const bars = document.getElementById("bars");
+const fills = THRUSTER_NAMES.map((name) => {
+  const row = document.createElement("div");
+  row.className = "bar";
+  row.innerHTML = `<span>${name}</span><div class="track"><div class="fill"></div></div><b></b>`;
+  bars.append(row);
+  return { fill: row.querySelector(".fill"), label: row.querySelector("b") };
+});
+
+const timing = { loadMs: 0, stepUs: 0, reloads: 0, reloadMs: 0 };
+window.spike = { timing };
+
+const startedLoad = performance.now();
+const mp = await loadMicroPython({ stdout: (line) => console.log("[py]", line) });
+timing.loadMs = performance.now() - startedLoad;
+window.spike.mp = mp;
+mp.runPython(HARNESS);
+const step = mp.globals.get("_step");
+let broken = false;
+
+async function loadStudentFiles() {
+  const started = performance.now();
+  for (const name of STUDENT_FILES) {
+    const text = await (await fetch(name, { cache: "no-store" })).text();
+    mp.FS.writeFile("/" + name, text);
+  }
+  try {
+    mp.runPython("_load()");
+    broken = false;
+    errorBox.textContent = "";
+  } catch (e) {
+    showError(e);
+  }
+  timing.reloads += 1;
+  timing.reloadMs = performance.now() - started;
+}
+
+function showError(e) {
+  broken = true;
+  errorBox.textContent = String(e.message || e);
+}
+
+// How long one step costs, measured once: 2400 calls is 10 s of a 240 Hz sim.
+function measureStep(calls) {
+  const started = performance.now();
+  for (let i = 0; i < calls; i++) step(0.1, -0.5, 0.2, -0.3, 0, 0);
+  return ((performance.now() - started) * 1000) / calls;
+}
+window.spike.measureStep = measureStep;
+
+await loadStudentFiles();
+if (!broken) timing.stepUs = measureStep(2400);
+
+new EventSource("/changes").onmessage = (event) => {
+  const path = event.data;
+  if (STUDENT_FILES.some((name) => path === HERE + name)) loadStudentFiles();
+  else if (path.startsWith(HERE)) location.reload();
+};
+
+function frame() {
+  const pad = Pad.update();
+  if (!broken) {
+    try {
+      const commands = step(...pad.axes).split(",").map(Number);
+      commands.forEach((c, i) => {
+        const fill = fills[i];
+        const size = Math.min(Math.abs(c), 1) * 150;
+        fill.fill.style.left = (c >= 0 ? 150 : 150 - size) + "px";
+        fill.fill.style.width = size + "px";
+        fill.label.textContent = c.toFixed(2);
+      });
+    } catch (e) {
+      showError(e);
+    }
+  }
+  stats.textContent =
+    `MicroPython loaded in ${timing.loadMs.toFixed(0)} ms\n` +
+    `one step: ${timing.stepUs.toFixed(1)} us (240 per second = ` +
+    `${((timing.stepUs * 240) / 1000).toFixed(2)} ms of every second)\n` +
+    `reloads: ${timing.reloads}, last took ${timing.reloadMs.toFixed(0)} ms\n` +
+    `input: ${pad.source}`;
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

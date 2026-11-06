@@ -18,10 +18,18 @@ orientation for working *on* the project.
 
     board/      EXACT image of the XIAO's root -- see Invariants
     games/      browser games; published to GitHub Pages by .github/workflows
-    spikes/     the measurement scripts behind the numbers below; not board content
-    tools/      setup, sync, verify, run-a-spike, console
+    spikes/     the experiments behind the numbers below; not board content
+    tools/      setup, sync, verify, run-a-spike, console, serve (local web server)
 
-No lessons are written yet. `board/controller.py` is the working spike that
+No lessons are written yet, but **the sequence is agreed: `docs/lesson-plan-notes.md`**
+holds it (L301-L312), with the concept table, every decision and why, the
+`pilot()` API, and what the sim needs before the sim lessons. Read it before
+writing a lesson. In short: four board lessons make the gamepad, then students
+write the ROV's input-to-thruster mapping in Python **that runs inside the
+sim** (MicroPython-WASM, edited in VS Code, live-reloaded by `tools/serve.py`),
+in `sim/L3xx_*/` folders that do not exist yet.
+
+`board/controller.py` is the working spike that
 every game currently runs against; `board/code.py` imports it. It is built on
 two course modules at the board root (like Part 1's `screen.py`, these are the
 surface students use; `lib/` is for third-party code):
@@ -32,8 +40,9 @@ surface students use; `lib/` is for third-party code):
   (`gamepad.A` is `buttons[0]`). `set_button(name, pressed)` for the common
   case. Converting to the report's -127 .. 127 is its job alone.
 - **`sticks.py`** -- `left, right = sticks.connect(i2c)`; each `Stick` reads
-  `.x`, `.y` as -1.0 .. 1.0 (y up is -1, like the browser) and `.pressed`.
-  Measures each center at connect(), default `dead_zone` 0.06, `flip_x/y`. It
+  `.x`, `.y` as -1.0 .. 1.0 (y up is -1, like the browser). The stick on A0/A1
+  comes first. Measures each center at connect(), default `dead_zone` 0.06,
+  `flip_x/y` (-1 for a stick mounted the other way round). It
   is the only code that knows about volts. Each `.x`/`.y` is a fresh ADS1115
   conversion (~2 ms), so read once per loop.
 
@@ -98,10 +107,12 @@ the Serial Monitor panel) and retry -- do not route around it.
 - **Pins, XIAO RP2350.** Only **A0-A2** (= D0-D2) are usable analog inputs:
   `board.A3` is `board.VOLTAGE_MONITOR`, the battery sense pin. I2C is D4/D5
   (`board.I2C()`). D8/D9/D10 are also SCK/MISO/MOSI, and D0/D1 are also A0/A1
-  -- the breadboard uses all five for buttons, so SPI is unavailable and only
-  A2 is left for the RP2350's own ADC unless something moves. D11-D18 are pads
-  on the underside, not breadboard pins. In use: D0 X, D1 Y, D4/D5 I2C,
-  D7/D8 stick clicks, D9 A, D10 B; free: D2 (A2), D3, D6.
+  -- the breadboard uses all of them for buttons, so SPI and the RP2350's own
+  ADC are unavailable (the course goes straight to the ADS1115 anyway).
+  D11-D18 are pads on the underside, not breadboard pins. **Every breadboard
+  pin is in use, final as of 2026-11-06** (and in the pin picture students
+  get): D0 LB, D1 RB, D2 LT, D3 RT, D4/D5 I2C, D6 Start, D7 A, D8 B, D9 X,
+  D10 Y. No stick clicks.
 
 - **Wire buttons to GND with the internal pull-up** (`Pull.UP`, pressed reads
   `False`). RP2350 erratum E9: with the internal pull-DOWN on, a pin driven high
@@ -165,32 +176,41 @@ the Serial Monitor panel) and retry -- do not route around it.
 ## Games
 
 **Games stay dumb on purpose.** No dead zone, no smoothing, no auto-repeat in
-any game. Every interesting decision -- mapping, sensitivity, dead zones,
-calibration -- lives in the board's Python, which is where students learn.
-The marble creeping on a "level" board is the lesson, not a bug to fix in JS.
+any game. Calibration, sensitivity and dead zones live in the board's Python;
+**mapping inputs to thrusters will live in the student's `pilot.py`, run by
+the sim** (decided 2026-11-05, not built), so the board stays a plain gamepad
+that an Xbox controller could replace. The marble creeping on a "level" board
+is the lesson, not a bug to fix in JS.
 
 **`games/pad.js` and `board/controller.py` are two halves of one contract.**
 Change a slot in one, change the other. The slots:
 
     slot           gamepad.py                 wired to
-    axes[0], [1]   left_x, left_y             ADS1115 A0, A1  (-1 left/up .. +1 right/down)
-    axes[2], [3]   right_x, right_y           ADS1115 A2, A3
+    axes[0], [1]   left_x, left_y             ADS1115 A2, A3  (-1 left/up .. +1 right/down)
+    axes[2], [3]   right_x, right_y           ADS1115 A0, A1
     axes[4], [5]   tilt_x, tilt_y             accelerometer: right edge down +1,
                                               far edge down -1
-    buttons[0..3]  A, B, X, Y                 D9, D10, D0, D1
-    buttons[9]     START                      not sent yet
-    buttons[10/11] LEFT_CLICK, RIGHT_CLICK    D7, D8
+    buttons[0..3]  A, B, X, Y                 D7, D8, D9, D10
+    buttons[4..7]  LB, RB, LT, RT             D0, D1, D2, D3
+    buttons[9]     START                      D6
+    buttons[10/11] LEFT_CLICK, RIGHT_CLICK    not wired
     buttons[12-15] DPAD_UP ... DPAD_RIGHT     not sent (tried, removed for clarity)
 
-**The table is the wiring the docs describe; `controller.py` currently swaps
-it.** Since 2026-10-18 it does `right, left = sticks.connect(i2c)`, reverses
-the stick on A0/A1, and reads the accelerometer as `ay, ax, az` -- the
-physical board is mounted differently from the first layout. `level_x/y` are
-measured the same swapped way round; keep the two in step or tilt drifts.
+**The breadboard's mounting is set in one block of `controller.py`** ("How this
+breadboard is built"), expected to be how students build theirs too: the stick
+on A0/A1 is the RIGHT one (`right, left = sticks.connect(i2c)`), the left stick
+is turned 180 degrees from it (`left.flip_x = left.flip_y = -1`), and the
+SEN0140 is turned so its x and y are the breadboard's y and x
+(`board_acceleration()`). "Level" is measured through the same function, so the
+swap cannot drift out of step with the loop. A board built another way changes
+only that block; each comment says what to change. **Unverified on hardware
+since the 2026-11-06 rewrite** (the same mapping, moved from minus signs and an
+`ay, ax, az` unpack in two places) -- check it on the Controller check page.
 
-In the ROV sim, **X switches camera and Y switches pitch AND roll between
-following tilt and holding level by itself**. Start is still not sent: routing
-a stick click to it is a one-line student exercise. The keyboard
+In the ROV sim's built-in pilot, **B switches ROV, X switches camera, Y
+switches pitch AND roll between following tilt and holding level by itself,
+LB/RB close/open the claw, Start resets**. In pilot mode (planned) students
+choose their own buttons for all of it, camera included. The keyboard
 stands in for everything (see `pad.js`; X and Y keys are the X and Y buttons),
 and **a held key overrides a connected gamepad** -- otherwise a teacher
 demonstrating with a board plugged in finds the keyboard dead.
@@ -240,9 +260,11 @@ Three files, so each can change alone:
   as feed-forward, a yaw-RATE controller, and "staying upright beats moving"
   when thrusters saturate. Later, the student's Python is meant to replace
   `PilotAssist` (board in the loop), so keep the two separate.
-- **`rov_sim.html`** builds the 3D model from the profile. P switches profile
-  (also `?profile=triangle`), V shows forces (thrust arrows, weight and lift),
-  and a panel shows each thruster's command and newtons.
+- **`rov_sim.html`** builds the 3D model from the profile. B switches profile
+  (also `?profile=triangle`), V cycles forces (thrust arrows, then also weight
+  and lift, then off), P hides the right-hand panels, LB/RB close/open the
+  claw (keys "," and "."), and a panel shows each thruster's command and
+  newtons.
 
 Verified 2026-10-25 with the U3 at 13 V, both profiles, through `sim.fly` /
 `sim.thrusters` (the hand calculation is T * lever = B * (CoB - CoM) * sin tilt):
@@ -345,6 +367,11 @@ suits a slow, heavily damped vehicle; this one is neither.
 here measured old code that way. After editing a module, hard-reload
 (Ctrl+Shift+R), or check `sim.assist.fly.toString()` contains the change.
 GitHub Pages caches for 10 minutes, so a just-pushed fix can look unfixed.
+**`tools/serve.py` fixes this locally** (launch config `serve`,
+`http://localhost:8770/`, the repo root): it sends `Cache-Control: no-store`,
+pushes each saved file's path to pages on `/changes` for live reload, and
+listens on both ::1 and 127.0.0.1 -- bound to IPv4 alone, Chrome's `localhost`
+tried IPv6 first and every request took 310 ms instead of 5.
 
 ## Invariants
 
