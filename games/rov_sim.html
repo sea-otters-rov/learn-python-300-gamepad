@@ -79,7 +79,8 @@
     X changes camera, Y switches pitch and roll between tilt and level,
     Start resets. Keyboard: arrows, W A S D, T F G H, "," and "." for the
     claw, B, X, Y, Enter.
-    V shows forces, Q changes drawing resolution, I shows what the sim receives.
+    V shows thrust, again adds weight and buoyancy, again hides them.
+    Q changes drawing resolution, I shows what the sim receives.
   </div>
   <div id="message" hidden><div id="message-text"></div></div>
 </div>
@@ -523,7 +524,9 @@ let running = false; // the clock waits for the first input
 let finished = false;
 let chaseCamera = true;
 let attitudeFromTilt = true; // false: the ROV holds itself level (Y)
-let showForces = false;
+// V steps through: 0 nothing, 1 thruster arrows, 2 thrusters plus weight and
+// buoyancy, then back to 0
+let showForces = 0;
 let peakAmps = 0; // the most current drawn since the last reset
 
 function chooseProfile(name) {
@@ -771,7 +774,7 @@ function placeCamera(blend) {
   }
   // onboard, the claw stays in view the way it does on a real ROV's camera
   model.body.visible = chaseCamera;
-  model.forces.visible = showForces && chaseCamera;
+  model.forces.visible = showForces === 2 && chaseCamera;
 }
 
 const arrowWay = new THREE.Vector3();
@@ -785,7 +788,7 @@ function drawRov() {
     model.glows[i].emissive.setRGB(amount < 0 ? -amount : 0, amount > 0 ? amount * 0.8 : 0, 0);
     // no arrow for a thruster that is not pushing
     const arrow = model.arrows[i];
-    arrow.visible = showForces && chaseCamera && Math.abs(amount) > ARROW_FROM;
+    arrow.visible = showForces >= 1 && chaseCamera && Math.abs(amount) > ARROW_FROM;
     if (arrow.visible) {
       arrowWay.copy(t.direction).multiplyScalar(amount < 0 ? -1 : 1);
       arrow.setDirection(arrowWay);
@@ -837,7 +840,7 @@ addEventListener("keydown", (e) => {
     resolutionIndex = (resolutionIndex + 1) % RESOLUTIONS.length;
     applyResolution();
   } else if (e.code === "KeyV") {
-    showForces = !showForces;
+    showForces = (showForces + 1) % 3;
   }
 });
 
