@@ -169,6 +169,17 @@ const r = EDGE / (2 * Math.sqrt(3)); // center to the middle of an edge, 0.144 m
 
 // The corners, as seen from above, with the nose corner pointing forward
 // (assumed: a pointed end makes a natural front, and a place for the claw).
+// Where the vertical thrusters sit, as a fraction of center-to-corner: just
+// OUTSIDE each corner, beyond the frame's corner post. The tube's edge must
+// clear the post by its radius plus 2 cm for half a bar and a gap, so
+// 1 + (0.045 + 0.02) / R -- about 1.23, 35 cm from the center.
+//
+// Inside the corners was tried first: corners narrow, so a tube only fits
+// 55% of the way out, and that short lever left the triangle unable to reach
+// a full nose-down tilt (29.9 of 35 deg). Before that, 85% overlapped the
+// frame bars and flickered.
+const CORNER_OUT = 1 + (THRUSTER.radius + 0.02) / R;
+
 const nose = [0, -R];
 const rearRight = [EDGE / 2, r];
 const rearLeft = [-EDGE / 2, r];
@@ -203,14 +214,14 @@ const triangle = {
   idleCurrent: IDLE_CURRENT,
   clawHoldCurrent: CLAW_HOLD_CURRENT,
   thrusters: [
-    // vertical, one in each corner (assumed 85% of the way out, so they fit)
+    // vertical, one just outside each corner (CORNER_OUT)
     ...[
       ["up nose", nose],
       ["up rear R", rearRight],
       ["up rear L", rearLeft],
     ].map(([name, [x, z]]) => ({
       name,
-      position: [x * 0.85, 0, z * 0.85],
+      position: [x * CORNER_OUT, 0, z * CORNER_OUT],
       direction: [0, 1, 0],
     })),
     // horizontal, on the bottom outside edge, each pushing along its edge
@@ -219,7 +230,9 @@ const triangle = {
     edgeThruster("edge L", rearLeft, nose),
   ],
 
-  claw: [0, -THICK / 2 - 0.02, -R - 0.2], // under the nose, 20 cm ahead
+  // under the nose, 20 cm ahead -- and 5 cm below the frame, so the claw's
+  // arm passes clear under the nose thruster (just touching, they flickered)
+  claw: [0, -THICK / 2 - 0.05, -R - 0.2],
   camera: [0, 0.02, -R + 0.06], // just behind the nose
   hull: [nose, rearRight, rearLeft].flatMap(([x, z]) => [
     [x, THICK / 2, z],

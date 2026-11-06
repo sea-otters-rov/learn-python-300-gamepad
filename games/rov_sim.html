@@ -437,6 +437,10 @@ function buildModel(vehicle) {
       for (const y of [half, -half]) bar([x, y, z], [nx, y, nz]);
       bar([x, -half, z], [x, half, z]);
     });
+    // a strut from the nose corner down to the claw's arm, which hangs below
+    // the frame to clear the nose thruster
+    const armStart = [p.claw[0], p.claw[1], p.claw[2] + 0.2];
+    bar([armStart[0], -half, armStart[2]], armStart);
   }
 
   // thrusters: each a short tube along its own direction, glowing green when
@@ -602,9 +606,9 @@ function physics(pad, dt) {
   const pitchIn = pad.axes[5] || 0;
   assist.fly(
     {
-      turn: pad.axes[0] || 0,
+      turn: pad.axes[2] || 0,
       forward: -(pad.axes[1] || 0),
-      sideways: pad.axes[2] || 0,
+      sideways: pad.axes[0] || 0,
       rise: -(pad.axes[3] || 0),
       // in level mode the ROV holds pitch and roll at zero whatever the board does
       pitch: attitudeFromTilt ? pitchIn * MAX_PITCH : 0,

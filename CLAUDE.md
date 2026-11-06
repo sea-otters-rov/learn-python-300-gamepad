@@ -258,6 +258,23 @@ Verified 2026-10-25 with the U3 at 13 V, both profiles, through `sim.fly` /
     hands off 20 s                   still, level         still, level
     crab mission, all 5              completes            completes
 
+**The triangle's vertical thrusters sit just OUTSIDE its corners** since
+2026-11-05 (`CORNER_OUT`, 35.4 cm from center, 5 mm clear of the corner
+posts). History, because each step was a real constraint:
+
+    85% of the way out, inside   tube overlapped the edge bars by 2.3 cm, and
+                                 its end caps shared a plane with the bars'
+                                 faces -- z-fighting flicker
+    55%, inside (the most that   fit, but the short lever lost torque: full
+    fits -- corners narrow)      nose-down tilt only reached 29.9 of 35 deg
+    123%, outside                full tilt again; one corner thruster alone
+                                 now tips it 65 deg (the longer lever)
+
+The claw moved 3 cm lower (`claw` y = -0.10) so its arm passes 3 cm under the
+nose thruster -- touching, they would flicker the same way -- with a strut in
+the drawing from the nose corner down to it. **Any two parts whose faces meet
+exactly will flicker**; leave a gap.
+
 **The cube cannot hold more than ~16 deg of tilt with these thrusters.** Its
 float's righting torque (up to 23.5 N m, 20 cm lever) beats four 11.7 N
 verticals. With T200s it reached the full 35. The triangle's 5 cm lever lets
