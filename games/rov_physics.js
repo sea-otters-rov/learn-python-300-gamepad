@@ -72,6 +72,7 @@ export class Vehicle {
     }
     this.thrusters = profile.thrusters.map((t) => ({
       name: t.name,
+      id: t.id, // its name in the students' Python (sim/cube.py, triangle.py)
       offset: fromCenterOfMass(t.position),
       direction: vec(t.direction).normalize(),
       command: 0, // what it was told, -1 .. 1
@@ -360,19 +361,25 @@ export class PilotAssist {
     const omega = s.stabilizerSpeed;
     const zeta = s.stabilizerDamping;
     const ki = s.stabilizerIntegral;
-    // The integral only learns when the ROV is NEAR its target and the target
-    // is still. Otherwise a big deliberate tilt -- or the cube pinned at the
-    // most tilt its thrusters can hold -- piles up error that is not a steady
-    // load at all, and it overshoots: the triangle swung to 44 deg on its way
-    // to 35. A crab's few-degree dip is well inside. It is also capped, so a
-    // long-held error cannot build an enormous push ("wind-up").
+    // The integral only learns a STEADY load: the target is still and the ROV
+    // has stopped turning, yet it is off target. While the ROV is still
+    // swinging towards a big deliberate tilt the error is not a load at all,
+    // and learning from it overshoots: the triangle swung to 44 deg on its way
+    // to 35. It is also capped, so a long-held error cannot build an enormous
+    // push ("wind-up").
+    //
+    // Until 2026-11-06 the test was "within 5 deg of the target" instead of
+    // "stopped turning". The heavy crab (8 N) leaves the stabilizer's spring
+    // 14 deg short -- outside 5 deg, so the integral never started and the
+    // cube sat at 14 deg nose-down for good. The cap was 30% of full pitch
+    // push, also short of the heavy crab's ~3.6 N m on the cube.
     if (!targetMoving) {
-      const capPitch = (0.3 * this.fullStick[PITCH].up) / (I[0] * omega * omega * ki);
-      const capRoll = (0.3 * this.fullStick[ROLL].up) / (I[2] * omega * omega * ki);
-      if (Math.abs(pitchError) < s.integralWithin) {
+      const capPitch = (s.integralCap * this.fullStick[PITCH].up) / (I[0] * omega * omega * ki);
+      const capRoll = (s.integralCap * this.fullStick[ROLL].up) / (I[2] * omega * omega * ki);
+      if (Math.abs(w.x) < s.integralBelowRate) {
         this.integral.pitch = THREE.MathUtils.clamp(this.integral.pitch + pitchError * dt, -capPitch, capPitch);
       }
-      if (Math.abs(rollError) < s.integralWithin) {
+      if (Math.abs(w.z) < s.integralBelowRate) {
         this.integral.roll = THREE.MathUtils.clamp(this.integral.roll + rollError * dt, -capRoll, capRoll);
       }
     }

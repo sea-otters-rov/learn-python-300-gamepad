@@ -119,9 +119,19 @@ the capstone (Part 1's L199 pattern) is undecided.
 
 Per lesson:
 
-- **301** doubles as the smoke test, like Part 1's L101: a save reaches the
-  board, the Serial Monitor works, an LED lights. The XIAO's user LED needs
-  checking on hardware (`board.LED`, and whether it is active-low).
+- **301 -- written and verified 2026-11-06** (`board/L301_press_a_button`).
+  Doubles as the smoke test, like Part 1's L101: a save reaches the board,
+  the Serial Monitor works, an LED lights. **The XIAO's USR LED
+  (`board.LED`) is active-low** -- measured: it lit while a `Pull.UP` button
+  was held with `led.value = button.value`. The lesson says so in a comment
+  and writes `light.value = not pressed`; a try-this asks why
+  `light.value = pin_value` lights the same way. The first button goes on
+  **D7**, where A stays for the whole course. Verified on a D0 button (the
+  test board's): released prints `pin True  pressed False`; held lights the
+  LED; `Pull.DOWN` reads False released (and GND pressed), so the light just
+  stays on; `board.D20` is `AttributeError: 'module' object has no attribute
+  'D20'`. Also proved the picker's board path: `lesson.py 301` rewrote
+  `board/code.py` from `import controller` and the board restarted into it.
 - **302** -- the page sees no gamepad until a button is pressed after it
   loads (`CLAUDE.md`), so the first press *is* the proof. `boot.py` is given
   and never edited.
@@ -248,12 +258,9 @@ Each was an open question or an undecided idea in the earlier notes.
   away anyway. No gyro: the user does not expect students to use one.
 - **Self-leveling must be noticeable on the cube** -- the club had exactly
   this problem last season, mostly from low stability and partly from heavier
-  items on a long claw arm. Starting estimates, to tweak: the cube's float
-  **6 cm** above its center of mass (was 20), and **one 5 N heavy crab** in
-  the mission. Hand calculation (righting up to ~7 N m, claw ~0.4 m ahead):
-  ~2 deg dip with a normal crab, ~17 deg with the heavy one -- enough for the
-  claw camera to lose the basket. Verify in the sim; the cube's numbers in
-  `CLAUDE.md` all change with it.
+  items on a long claw arm, pitching about 20-30 deg. Built: the cube's float
+  **6 cm** above its center of mass (was 20), and **one 8 N heavy crab** --
+  22.6 deg unleveled, measured (see "What the sim needs", item 5).
 - **The sim keeps its built-in pilot** (`PilotAssist`) as a demo mode and the
   GitHub Pages fallback; pilot mode is the student's.
 - **Camera switching is the pilot's** (`rov.camera_onboard`), and **students
@@ -311,29 +318,52 @@ the sequence's center (309) is in the right place.
 
 ## What the sim needs before lesson 305
 
-None of this is built except the spike.
+1. **Done 2026-11-06 -- pilot mode** (`games/rov_pilot.js`, verified; see
+   `CLAUDE.md`, "rov_pilot.js"): MicroPython loaded once; the launcher line
+   in `sim/pilot.py`; that lesson's `main.py` plus `sim.py`, `cube.py`,
+   `triangle.py` in its filesystem; `pilot()` every 4th physics step; errors
+   with the harness's frames removed, all thrusters off until fixed; the last
+   six `print()` lines in a panel; `while True` refused before it runs;
+   reload on save; `PilotAssist` with no `sim/` (Pages), and M switches.
+2. **Done -- `sim/sim.py`** with `Pad` and `Rov`. `rov.thrust()` also
+   rejects a thruster number that is not on this ROV (negative indexes would
+   otherwise silently run the last one) and a power that is not a number.
+3. **Done -- `sim/cube.py`, `sim/triangle.py`**, checked against each
+   thruster's new `id` in `rov_profiles.js`. A lesson that imports the wrong
+   ROV's file gets a warning, not an error.
+4. **Done -- the accelerometer** (gravity only; no motion switch yet), and
+   `depth`, `heading`, `amps`. Its signs follow the controller's tilt.
+5. **Done 2026-11-06 -- profile changes.** Cube float at 6 cm; one **8 N
+   heavy crab** (drawn bigger and darker). The target was the user's **last
+   season: about 20-30 deg** of pitch with a heavy item. With depth held and no
+   leveling the cube settles at 22.6 deg, swinging to 27.7 on the grab;
+   normal crabs dip 1.8. The cost of a dip is what actually happens (the claw
+   camera loses the basket); **no crab slipping for now** (user: "let's
+   wait"). `CLAUDE.md`'s cube numbers are re-measured.
 
-1. **Pilot mode in `rov_sim.html`**: load MicroPython once; read the
-   launcher line in `sim/pilot.py`; write that lesson's `main.py` plus
-   `sim.py`, `cube.py`, `triangle.py` into its filesystem; call `pilot()`
-   every 4th physics step; show Python errors with the harness's own frame
-   removed; show `print()` output somewhere visible; reload on save through
-   `serve.py`'s `/changes`. Fall back to `PilotAssist` with no `sim/` (Pages).
-2. **`sim/sim.py`** with `Pad` and `Rov` as above, real classes so Pylance
-   autocompletes -- the same file the browser runs.
-3. **`sim/cube.py`, `sim/triangle.py`**: one constant per thruster in
-   profile order, checked by name at load.
-4. **A simulated accelerometer** on the vehicle, gravity only, with a switch
-   for motion later. Plus `depth`, `heading`, `amps` exposed.
-5. **Profile changes**: cube float to 6 cm; one 5 N heavy crab; decide what a
-   big dip costs (camera loses the basket; maybe the crab slips past some
-   angle). Re-verify and update `CLAUDE.md`'s cube numbers.
-6. **Keys**: reset and profile switching on keys that are not gamepad
-   stand-ins in `pad.js`.
-7. **`tools/serve.py`** watches `sim/` as well; **`tools/lesson.py`** (new
-   here) picks board and sim lessons.
-8. Still open from before: **the sim's fps on a school laptop** (press Q to
-   step resolution).
+   **Lesson material from it:** the built-in stabilizer, P plus an integral
+   that only learned within 5 deg, held the heavy crab at **14.3 deg forever**
+   -- the P term halved the dip and the steady error then sat outside the
+   integral's window. That is lesson 310's "dip that stays", shown by the sim
+   itself; a P-only student leveler will do the same. The built-in now learns
+   whenever the ROV has stopped turning, and levels the heavy crab in 5.2 s
+   -- the demo of where 309-310 are headed. On the triangle (stretch lesson)
+   the heavy crab equals its float's whole righting torque: it nearly rolls
+   onto its nose, and levels only slowly even with the built-in pilot.
+6. **Done -- keys**: R reset, 1 / 2 the ROV, M built-in pilot and back. In
+   pilot mode the sim ignores every controller button.
+7. **Done -- `serve.py` watches `sim/`, and `tools/lesson.py`** picks board
+   and sim lessons (VS Code task "Lesson: switch lesson"). A sim switch
+   rewrites `sim/pilot.py` and an open sim reloads into it (verified); a board
+   switch rewrites `board/code.py` -- which is still `import controller`, so
+   the first switch replaces it with the lesson line -- and pushes it (not yet
+   tried: no board lessons exist). The "Games: play in the browser" task now
+   runs `serve.py` on port 8770 instead of `http.server` on 8765.
+8. **Done -- the sim on a school laptop**: "a solid 60 fps" on one of the
+   laptops the club will use (user, 2026-11-06).
+
+`sim/L305_tank_drive/main.py` exists as pilot mode's test case: the given tank
+example, sign trap included. It is not a finished lesson -- no try-these yet.
 
 ## Spike: student Python in the browser (2026-11-05)
 
@@ -413,9 +443,9 @@ Found on the way:
   a command; 309 makes it a target and measures the vehicle's own attitude --
   which is what the real ROV's IMU does.
 - **Measured physics facts make good lesson material**: stability trades
-  against agility and current (the current cube holds 16 deg at 18.3 A; the
-  triangle 35 deg at 5.6 A). These numbers change when the cube's float moves
-  to 6 cm -- re-measure before quoting them in a lesson.
+  against agility and current. With its old 20 cm float the cube could hold
+  only 16 deg of tilt and burned 18.3 A doing it; at 6 cm it holds 35 deg on
+  9.1 A, and a heavy crab pitches it 22 deg. `CLAUDE.md` has the table.
 - The stabilizer tuning stories in `CLAUDE.md` (newtons not commands, lag as
   damping, scale don't clip, integral only near a still target) are the
   answer key for 309-311's hard cases.

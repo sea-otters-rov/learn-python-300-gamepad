@@ -102,16 +102,20 @@ const h = CUBE_SIZE / 2;
 
 const cube = {
   name: "Cube",
-  about: "Eight thrusters, each pushing straight along one axis. Very stable.",
+  about: "Eight thrusters, each pushing straight along one axis.",
   shape: { kind: "cube", size: CUBE_SIZE },
 
   mass: CUBE_MASS,
   centerOfMass: [0, 0, 0], // given: the middle
   // given: neutral, so it neither sinks nor floats
   buoyancy: CUBE_MASS * g,
-  // given: "near the top" -- assumed 5 cm below the top face. The 20 cm between
-  // this and the center of mass is what makes the cube hard to tip over.
-  centerOfBuoyancy: [0, h - 0.05, 0],
+  // 6 cm above the center of mass -- assumed, to match the club: last season's
+  // ROVs pitched about 20-30 deg nose-down holding a heavy item (user,
+  // 2026-11-06), which points to a few cm here, not the 20 cm of a float "near
+  // the top" (used until 2026-11-06). With 20 cm the cube barely noticed a
+  // crab and self-leveling had nothing to do; with 6 cm the heavy crab (8 N)
+  // pitches it ~22 deg. Measure the real ROV and replace this.
+  centerOfBuoyancy: [0, 0.06, 0],
 
   // How hard it is to start it spinning about x, y, z (kg m^2). Assumed: a
   // solid 12 kg cube, m * size^2 / 6. An open frame with heavy corners would
@@ -134,19 +138,21 @@ const cube = {
   thruster: THRUSTER,
   idleCurrent: IDLE_CURRENT,
   clawHoldCurrent: CLAW_HOLD_CURRENT,
-  // A positive command pushes the ROV along `direction`.
+  // A positive command pushes the ROV along `direction`. `id` is the
+  // thruster's name in the students' sim/cube.py, which must hold the same
+  // number as its place here -- the sim checks on every load.
   thrusters: [
     // four vertical, one near each corner of the middle of the cube
-    { name: "up FL", position: [-0.2, 0, -0.2], direction: [0, 1, 0] },
-    { name: "up FR", position: [0.2, 0, -0.2], direction: [0, 1, 0] },
-    { name: "up BL", position: [-0.2, 0, 0.2], direction: [0, 1, 0] },
-    { name: "up BR", position: [0.2, 0, 0.2], direction: [0, 1, 0] },
+    { name: "up FL", id: "UP_FRONT_LEFT", position: [-0.2, 0, -0.2], direction: [0, 1, 0] },
+    { name: "up FR", id: "UP_FRONT_RIGHT", position: [0.2, 0, -0.2], direction: [0, 1, 0] },
+    { name: "up BL", id: "UP_BACK_LEFT", position: [-0.2, 0, 0.2], direction: [0, 1, 0] },
+    { name: "up BR", id: "UP_BACK_RIGHT", position: [0.2, 0, 0.2], direction: [0, 1, 0] },
     // two forward, on the left and right faces -- pushing unevenly turns it
-    { name: "fwd L", position: [-h, 0, 0], direction: [0, 0, -1] },
-    { name: "fwd R", position: [h, 0, 0], direction: [0, 0, -1] },
+    { name: "fwd L", id: "FORWARD_LEFT", position: [-h, 0, 0], direction: [0, 0, -1] },
+    { name: "fwd R", id: "FORWARD_RIGHT", position: [h, 0, 0], direction: [0, 0, -1] },
     // two sideways, on the front and back faces -- these can turn it too
-    { name: "side F", position: [0, 0, -h], direction: [1, 0, 0] },
-    { name: "side B", position: [0, 0, h], direction: [1, 0, 0] },
+    { name: "side F", id: "SIDE_FRONT", position: [0, 0, -h], direction: [1, 0, 0] },
+    { name: "side B", id: "SIDE_BACK", position: [0, 0, h], direction: [1, 0, 0] },
   ],
 
   claw: [0, -h + 0.05, -h - 0.2], // where the claw closes: low, 20 cm ahead
@@ -213,21 +219,23 @@ const triangle = {
   thruster: THRUSTER,
   idleCurrent: IDLE_CURRENT,
   clawHoldCurrent: CLAW_HOLD_CURRENT,
+  // `id`: the thruster's name in sim/triangle.py, checked like the cube's
   thrusters: [
     // vertical, one just outside each corner (CORNER_OUT)
     ...[
-      ["up nose", nose],
-      ["up rear R", rearRight],
-      ["up rear L", rearLeft],
-    ].map(([name, [x, z]]) => ({
+      ["up nose", "UP_NOSE", nose],
+      ["up rear R", "UP_REAR_RIGHT", rearRight],
+      ["up rear L", "UP_REAR_LEFT", rearLeft],
+    ].map(([name, id, [x, z]]) => ({
       name,
+      id,
       position: [x * CORNER_OUT, 0, z * CORNER_OUT],
       direction: [0, 1, 0],
     })),
     // horizontal, on the bottom outside edge, each pushing along its edge
-    edgeThruster("edge R", nose, rearRight),
-    edgeThruster("edge back", rearRight, rearLeft),
-    edgeThruster("edge L", rearLeft, nose),
+    edgeThruster("edge R", "EDGE_RIGHT", nose, rearRight),
+    edgeThruster("edge back", "EDGE_BACK", rearRight, rearLeft),
+    edgeThruster("edge L", "EDGE_LEFT", rearLeft, nose),
   ],
 
   // under the nose, 20 cm ahead -- and 5 cm below the frame, so the claw's
@@ -244,7 +252,7 @@ const triangle = {
 // corner a to corner b, low on the frame, pushing in the a -> b direction.
 // Going a -> b around all three edges makes every one push the same way
 // round, so all three at +1 spins the ROV on the spot.
-function edgeThruster(name, a, b) {
+function edgeThruster(name, id, a, b) {
   const middle = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
   const out = Math.hypot(middle[0], middle[1]);
   const outward = [middle[0] / out, middle[1] / out];
@@ -253,6 +261,7 @@ function edgeThruster(name, a, b) {
   const MOUNT_OUT = 0.05; // m outside the edge -- assumed thruster radius
   return {
     name,
+    id,
     position: [
       middle[0] + outward[0] * MOUNT_OUT,
       -THICK / 2,

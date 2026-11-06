@@ -32,7 +32,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PORT = 8770
-WATCHED = ("games", "spikes")
+WATCHED = ("games", "sim", "spikes")
 WATCHED_ENDINGS = (".html", ".js", ".py", ".css")
 POLL_SECONDS = 0.25
 # A comment line every so often, so a page whose server died notices and
@@ -131,7 +131,8 @@ def main():
     for server in (ipv4, ipv6):
         server.daemon_threads = True
     threading.Thread(target=ipv6.serve_forever, daemon=True).start()
-    print(f"[serve] http://localhost:{PORT}/  watching {', '.join(WATCHED)}")
+    print(f"[serve] open http://localhost:{PORT}/games/ in Chrome")
+    print(f"[serve] watching {', '.join(WATCHED)} for saves")
     try:
         ipv4.serve_forever()
     except KeyboardInterrupt:

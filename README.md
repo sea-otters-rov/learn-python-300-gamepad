@@ -71,7 +71,10 @@ extensions and a `.venv` with autocomplete for the board. Then:
   - **Board: serial console** -- the REPL, with Ctrl-C and Ctrl-D
   - **Board: sync all files** -- after adding files or libraries
   - **Games: play in the browser** -- serve the games locally at
-    http://localhost:8765, for trying changes before they are published
+    http://localhost:8770/games/. The ROV sim runs your sim lesson from here
+    (not from the published site), and picks up each save straight away
+  - **Lesson: switch lesson** -- pick which lesson runs, on the board or in
+    the sim
 
 If saves stop doing anything, you probably used the REPL: run **Board: verify**
 once and they start again.

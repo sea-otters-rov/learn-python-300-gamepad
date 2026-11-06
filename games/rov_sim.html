@@ -44,6 +44,11 @@
   #power .over { color: var(--danger); font-weight: 700; }
   #perf { top: 10px; right: 10px; color: var(--dim); text-align: right; }
   #help { bottom: 10px; right: 10px; color: var(--dim); white-space: normal; max-width: 380px; font: 12px system-ui, sans-serif; }
+  #python { top: 10px; left: 50%; transform: translateX(-50%); max-width: 46%; white-space: pre-wrap; }
+  #python .error { color: var(--danger); }
+  #python .warning { color: var(--warn); }
+  #python .printed { color: var(--dim); }
+  #thrusters .over { color: var(--danger); }
   #message {
     position: absolute;
     inset: 0;
@@ -70,12 +75,16 @@
   <div class="panel" id="flight"></div>
   <div class="panel" id="thrusters"><div id="thruster-list"></div><div id="power"><div id="amps-now"></div><div id="amps-peak"></div><div id="amps-most"></div></div></div>
   <div class="panel" id="perf"></div>
+  <div class="panel" id="python" hidden></div>
   <div class="panel" id="help">
-    Left stick: forward/back and turn. Right stick: sideways and up/down.
-    Tilt: pitch and roll. LB closes the claw, RB opens it. B changes ROV,
-    X changes camera, Y switches pitch and roll between tilt and level,
-    Start resets. Keyboard: arrows, W A S D, T F G H, "," and "." for the
-    claw, B, X, Y, Enter.
+    <span id="help-pilot">Your pilot.py decides what every stick and button does.
+    M switches to the built-in pilot and back.</span>
+    <span id="help-assist">Built-in pilot: left stick forward/back and turn, right
+    stick sideways and up/down, tilt pitches and rolls. LB closes the claw, RB
+    opens it. B changes ROV, X changes camera, Y switches pitch and roll between
+    tilt and level, Start resets.</span>
+    Keyboard: arrows, W A S D, T F G H, "," and "." for LB and RB, B, X, Y, Enter.
+    R resets, 1 and 2 pick the cube or the triangle.
     V shows thrust, again adds weight and buoyancy, again hides them.
     Q changes drawing resolution, I shows what the sim receives,
     P hides these panels on the right.
@@ -111,17 +120,31 @@
 //
 // Which stick, tilt or button feeds which slot is the board's business; this
 // file never changes for it.
+//
+// That is the BUILT-IN pilot. In pilot mode (rov_pilot.js), the student's
+// Python decides what every input does: it is called 60 times a second with
+// the controller and the ROV's sensors, and sets each thruster, the claw and
+// the camera itself. The sim keeps only keys that are not controller stand-ins:
+// R reset, 1 / 2 the ROV, M built-in pilot and back.
 
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { PROFILES } from "./rov_profiles.js";
+import { PROFILES, GRAVITY } from "./rov_profiles.js";
 import { Vehicle, PilotAssist } from "./rov_physics.js";
+import { Pilot } from "./rov_pilot.js";
 
 // ---- things worth changing ----------------------------------------------------
 
 const CRAB_COUNT = 5;
 const CRAB_SEED = 2026; // same seed, same crabs in the same places
 const CRAB_WET_WEIGHT = 0.5; // N: a held crab pulls the claw down this much
+// One crab is heavy, the way MATE tasks have one heavy item. 8 N on the claw
+// pitches an unleveled cube ~22 deg, swinging to ~27 as it grabs -- last
+// season's ROVs pitched 20-30 deg with a heavy item. It is what makes
+// self-leveling (lessons 309-310) worth writing.
+const HEAVY_CRAB = 0; // which crab
+const HEAVY_CRAB_WET_WEIGHT = 8; // N
+const HEAVY_CRAB_SCALE = 1.4; // drawn bigger, so it can be told apart
 
 const POOL = { width: 20, length: 14, depth: 4.5 }; // m: x, z, y
 // the basket: far end of the pool, just under the surface
@@ -141,7 +164,8 @@ const ASSIST = {
   stabilizerSpeed: 4.0, // rad/s: bigger snaps to the target angle quicker
   stabilizerDamping: 0.7, // smaller is snappier, until it overshoots
   stabilizerIntegral: 1.0, // 1/s: how fast it learns a steady load, like a crab
-  integralWithin: THREE.MathUtils.degToRad(5), // ...but only this close to the target
+  integralBelowRate: THREE.MathUtils.degToRad(3), // ...but only once turning slower than this
+  integralCap: 0.6, // ...and with at most this fraction of the full pitch or roll push
   maxTurnRate: THREE.MathUtils.degToRad(60), // at full stick
   turnResponse: 4.0, // 1/s: how quickly a turn starts and stops
 };
@@ -154,6 +178,9 @@ const CURRENT_RED = 18; // A
 // ---- the rest -----------------------------------------------------------------
 
 const PHYSICS_STEP = 1 / 240;
+// The student's pilot() runs every 4th physics step: 60 times a second on any
+// laptop, because it follows sim time, not the drawing.
+const PILOT_EVERY = 4;
 const CURRENT = new THREE.Vector3(0, 0, 0); // a pool has none; a lake would
 const SURFACE = 0;
 const GRAB_RADIUS = 0.16; // m from claw tip to crab centre
@@ -324,6 +351,7 @@ const crabGeometry = (() => {
   return mergeGeometries(pieces);
 })();
 const CRAB_COLOR = flat(0x6f8f2a);
+const HEAVY_CRAB_COLOR = flat(0x8a3b1c);
 
 function crabSpots() {
   const roll = random(CRAB_SEED);
@@ -340,16 +368,26 @@ function crabSpots() {
   return spots;
 }
 
-const crabs = crabSpots().map((spot) => {
-  const mesh = new THREE.Mesh(crabGeometry, CRAB_COLOR);
+const crabs = crabSpots().map((spot, i) => {
+  const heavy = i === HEAVY_CRAB;
+  const mesh = new THREE.Mesh(crabGeometry, heavy ? HEAVY_CRAB_COLOR : CRAB_COLOR);
+  const scale = heavy ? HEAVY_CRAB_SCALE : 1;
+  mesh.scale.setScalar(scale);
   scene.add(mesh);
-  return { spot, mesh, position: new THREE.Vector3(), state: "floor" };
+  return {
+    spot,
+    mesh,
+    position: new THREE.Vector3(),
+    state: "floor",
+    wetWeight: heavy ? HEAVY_CRAB_WET_WEIGHT : CRAB_WET_WEIGHT,
+    halfHeight: CRAB_HALF_HEIGHT * scale,
+  };
 });
 
 function placeCrabsAtHome() {
   for (const crab of crabs) {
     crab.state = "floor"; // "floor", "held", "sinking" or "collected"
-    crab.position.set(crab.spot.x, FLOOR + CRAB_HALF_HEIGHT, crab.spot.z);
+    crab.position.set(crab.spot.x, FLOOR + crab.halfHeight, crab.spot.z);
     crab.mesh.rotation.set(0, crab.spot.turn, 0);
   }
 }
@@ -519,7 +557,13 @@ let vehicle;
 let assist;
 let model;
 
-const rov = { clawClosed: false, clawAngle: 0.5, held: null };
+// clawWanted is what the pilot asks for; workClaw() makes it so
+const rov = { clawWanted: false, clawClosed: false, clawAngle: 0.5, held: null };
+
+let pilot = null; // the student's Python (rov_pilot.js), once it has loaded
+let pilotMode = false; // true: pilot.py flies; false: the built-in pilot assist
+let pilotCommands = new Float64Array(8);
+let stepsUntilPilot = 0;
 
 let clock = 0;
 let running = false; // the clock waits for the first input
@@ -538,6 +582,8 @@ function chooseProfile(name) {
   assist = new PilotAssist(vehicle, ASSIST);
   model = buildModel(vehicle);
   scene.add(model.group);
+  pilotCommands = new Float64Array(vehicle.thrusters.length);
+  if (pilot) pilot.changeProfile(vehicle.profile);
   try {
     localStorage.setItem("rov-sim-profile", profileName);
   } catch {}
@@ -548,8 +594,11 @@ function reset() {
   vehicle.place(new THREE.Vector3(START.x, START.y, START.z), START.heading);
   assist.reset();
   peakAmps = 0;
+  rov.clawWanted = false;
   rov.clawClosed = false;
   rov.held = null;
+  stepsUntilPilot = 0;
+  pilotCommands.fill(0);
   placeCrabsAtHome();
   clock = 0;
   running = false;
@@ -589,7 +638,7 @@ function finish() {
     `<strong>All ${CRAB_COUNT} crabs collected</strong><br>${clock.toFixed(1)} s ` +
       `with the ${vehicle.profile.name.toLowerCase()}` +
       (record ? " &nbsp;-- best time!" : ` &nbsp;(best ${best.toFixed(1)} s)`) +
-      "<br>Start to try again",
+      "<br>R to try again",
   );
 }
 
@@ -597,9 +646,21 @@ function finish() {
 
 function physics(pad, dt) {
   if (!running && !finished) {
-    running = pad.axes.some((a) => Math.abs(a) > 0.05) || pad.buttons[4] || pad.buttons[5];
+    running = pad.axes.some((a) => Math.abs(a) > 0.05) || pad.buttons.some(Boolean);
   }
 
+  if (pilotMode) flyByPilot(pad);
+  else flyByAssist(pad, dt);
+  moveVehicle(dt);
+  workClaw(dt);
+  moveCrabs(dt);
+
+  if (running && !finished) clock += dt;
+}
+
+function flyByAssist(pad, dt) {
+  if (pad.buttons[4]) rov.clawWanted = true;
+  else if (pad.buttons[5]) rov.clawWanted = false;
   const rollIn = pad.axes[4] || 0;
   const pitchIn = pad.axes[5] || 0;
   assist.fly(
@@ -614,11 +675,55 @@ function physics(pad, dt) {
     },
     dt,
   );
-  moveVehicle(dt);
-  workClaw(pad, dt);
-  moveCrabs(dt);
+}
 
-  if (running && !finished) clock += dt;
+// The student's pilot(), every PILOT_EVERY steps. Between calls each thruster
+// keeps its last command, as a real ROV's ESCs would. A Python error stops
+// every thruster until the file is fixed and saved.
+function flyByPilot(pad) {
+  stepsUntilPilot -= 1;
+  if (stepsUntilPilot > 0) return;
+  stepsUntilPilot = PILOT_EVERY;
+  const result = pilot.call(pilotInputs(pad), pilotCommands);
+  vehicle.thrusters.forEach((t, i) => (t.command = result ? pilotCommands[i] : 0));
+  if (result) {
+    rov.clawWanted = result.clawClosed;
+    chaseCamera = !result.cameraOnboard;
+  }
+}
+
+const upInBody = new THREE.Vector3();
+const toBody = new THREE.Quaternion();
+
+// What an accelerometer bolted flat on the ROV reads, gravity only: m/s^2,
+// signed like the controller's own (board/controller.py) with its far edge at
+// the nose -- level (0, 0, 9.8), right side down +x, nose down -y. The body
+// axes underneath are x right, y up, z back.
+function accelerometer() {
+  upInBody.set(0, 1, 0).applyQuaternion(toBody.copy(vehicle.attitude).invert());
+  return [-upInBody.x * GRAVITY, -upInBody.z * GRAVITY, upInBody.y * GRAVITY];
+}
+
+function pilotInputs(pad) {
+  let buttons = 0;
+  pad.buttons.forEach((held, i) => {
+    if (held) buttons |= 1 << i;
+  });
+  return {
+    axes: pad.axes,
+    buttons,
+    acceleration: accelerometer(),
+    depth: -vehicle.position.y,
+    heading: compassHeading(),
+    amps: vehicle.current(),
+    clawClosed: rov.clawClosed,
+    cameraOnboard: !chaseCamera,
+  };
+}
+
+// 0 .. 360, turning right counts up, like a compass (angles() counts left)
+function compassHeading() {
+  return ((-degrees(vehicle.angles().heading) % 360) + 360) % 360;
 }
 
 function moveVehicle(dt) {
@@ -696,8 +801,8 @@ function crabInReach() {
   return best;
 }
 
-function workClaw(pad, dt) {
-  if (pad.buttons[4] && !rov.clawClosed) {
+function workClaw(dt) {
+  if (rov.clawWanted && !rov.clawClosed) {
     rov.clawClosed = true;
     const crab = crabInReach();
     if (crab) {
@@ -705,10 +810,10 @@ function workClaw(pad, dt) {
       rov.held = crab;
       // a held crab hangs off the front of the ROV and pulls it nose-down, and
       // the claw's servo draws current to keep its grip
-      vehicle.payload = { offset: vehicle.clawOffset, wetWeight: CRAB_WET_WEIGHT };
+      vehicle.payload = { offset: vehicle.clawOffset, wetWeight: crab.wetWeight };
       vehicle.clawCurrent = vehicle.profile.clawHoldCurrent;
     }
-  } else if (pad.buttons[5] && rov.clawClosed) {
+  } else if (!rov.clawWanted && rov.clawClosed) {
     rov.clawClosed = false;
     if (rov.held) {
       // let go from where the claw is NOW, not where it was last drawn
@@ -734,12 +839,12 @@ function moveCrabs(dt) {
       crab.position.y -= SINK_SPEED * dt;
       const wasAboveBasketFloor = crab.position.y + SINK_SPEED * dt > basketBottom;
       if (insideBasket(crab.position.x, crab.position.z, 0.06) && wasAboveBasketFloor &&
-          crab.position.y <= basketBottom + CRAB_HALF_HEIGHT) {
-        crab.position.y = basketBottom + 0.02 + CRAB_HALF_HEIGHT;
+          crab.position.y <= basketBottom + crab.halfHeight) {
+        crab.position.y = basketBottom + 0.02 + crab.halfHeight;
         crab.state = "collected";
         if (collectedCount() === crabs.length && !finished) finish();
-      } else if (crab.position.y <= FLOOR + CRAB_HALF_HEIGHT) {
-        crab.position.y = FLOOR + CRAB_HALF_HEIGHT;
+      } else if (crab.position.y <= FLOOR + crab.halfHeight) {
+        crab.position.y = FLOOR + crab.halfHeight;
         crab.state = "floor";
       }
     }
@@ -849,8 +954,24 @@ addEventListener("keydown", (e) => {
       const panel = document.getElementById(id);
       panel.hidden = !panel.hidden;
     }
+  } else if (e.code === "KeyR") {
+    reset();
+  } else if (e.code === "Digit1" || e.code === "Digit2") {
+    chooseProfile(PROFILE_NAMES[Number(e.code.slice(-1)) - 1]);
+  } else if (e.code === "KeyM" && pilot) {
+    setPilotMode(!pilotMode);
   }
 });
+
+function setPilotMode(on) {
+  pilotMode = on && pilot !== null;
+  // whichever pilot takes over starts from rest, not from the other's commands
+  for (const t of vehicle.thrusters) t.command = 0;
+  assist.reset();
+  stepsUntilPilot = 0;
+  document.getElementById("help-pilot").hidden = !pilotMode;
+  document.getElementById("help-assist").hidden = pilotMode;
+}
 
 const gpu = (() => {
   const gl = renderer.getContext();
@@ -881,7 +1002,7 @@ let averageMs = 0;
 const degrees = (radians) => (radians * 180) / Math.PI;
 
 function clawText() {
-  if (rov.held) return "holding a crab";
+  if (rov.held) return rov.held.wetWeight === HEAVY_CRAB_WET_WEIGHT ? "holding the HEAVY crab" : "holding a crab";
   if (rov.clawClosed) return "closed";
   return crabInReach() ? "open -- crab in reach" : "open";
 }
@@ -902,16 +1023,30 @@ function updatePanels(pad) {
     `depth    ${(-vehicle.position.y).toFixed(1)} m\n` +
     `speed    ${vehicle.velocity.length().toFixed(2)} m/s\n` +
     `heading  ${compass.toFixed(0).padStart(3, "0")}\n` +
-    `pitch    ${degrees(angles.pitch).toFixed(0).padStart(4)}  ${attitudeFromTilt ? "tilt" : "level"}\n` +
+    `pitch    ${degrees(angles.pitch).toFixed(0).padStart(4)}  ${pilotMode ? "" : attitudeFromTilt ? "tilt" : "level"}\n` +
     `roll     ${degrees(-angles.roll).toFixed(0).padStart(4)}\n` +
     `claw     ${clawText()}\n` +
     `crabs    ${collectedCount()} / ${crabs.length}\n` +
     `time     ${clock.toFixed(1)} s\n` +
     `camera   ${chaseCamera ? "chase" : "onboard"}`;
-  thrusterList.textContent = vehicle.thrusters
-    // + 0 turns a rounded -0 into 0, so a resting thruster never reads "-0 N"
-    .map((t) => `${t.name.padEnd(9)} ${bar(t.command)} ${String(Math.round(t.thrust) + 0).padStart(4)} N`)
-    .join("\n");
+  // In pilot mode each thruster goes by its name in the student's Python, and
+  // a command past 1.0 shows what was asked for: the thruster can only give
+  // 1.0, and asking for more is the first sign a mix needs scaling.
+  thrusterList.replaceChildren(
+    ...vehicle.thrusters.map((t) => {
+      const line = document.createElement("div");
+      const label = pilotMode ? t.id.padEnd(14) : t.name.padEnd(9);
+      // + 0 turns a rounded -0 into 0, so a resting thruster never reads "-0 N"
+      const newtons = String(Math.round(t.thrust) + 0).padStart(4);
+      line.textContent = `${label} ${bar(t.command)} ${newtons} N`;
+      if (Math.abs(t.command) > 1) {
+        line.textContent += `  asked ${t.command.toFixed(2)}`;
+        line.className = "over";
+      }
+      return line;
+    }),
+  );
+  showPython();
   const volts = vehicle.thrusterModel.volts;
   showAmps(powerLines.now, "current", vehicle.current(), `A at ${volts} V`);
   showAmps(powerLines.peak, "peak", peakAmps, "A since Start");
@@ -922,6 +1057,31 @@ function updatePanels(pad) {
     `${renderer.info.render.calls} calls\n` +
     `${gpu}\n` +
     `controls: ${pad.source}`;
+}
+
+const pythonPanel = document.getElementById("python");
+let pythonFailed = null; // MicroPython itself would not load
+
+function showPython() {
+  const lines = [];
+  const add = (text, className) => {
+    const line = document.createElement("div");
+    line.textContent = text;
+    if (className) line.className = className;
+    lines.push(line);
+  };
+  if (pythonFailed) {
+    add(`Python would not start: ${pythonFailed}`, "error");
+  } else if (pilot && pilotMode) {
+    add(`your pilot: sim/${pilot.lesson || "?"}/main.py  (loaded ${pilot.loads}x)`);
+    if (pilot.error) add(pilot.error + "\n\nThe thrusters are off. Fix it and save.", "error");
+    if (pilot.warning) add(pilot.warning, "warning");
+    if (pilot.output.length) add(pilot.output.join("\n"), "printed");
+  } else if (pilot) {
+    add("built-in pilot -- M for yours");
+  }
+  pythonPanel.hidden = lines.length === 0;
+  pythonPanel.replaceChildren(...lines);
 }
 
 // ---- main loop ----------------------------------------------------------------
@@ -958,6 +1118,11 @@ window.sim = {
   get clock() { return clock; },
   get attitudeFromTilt() { return attitudeFromTilt; },
   get chaseCamera() { return chaseCamera; },
+  get pilot() { return pilot; },
+  get pilotMode() { return pilotMode; },
+  setPilotMode,
+  accelerometer,
+  compassHeading,
   // run the whole sim on made-up inputs: sim.fly([0, -1, 0, 0, 0, 0], 3, [0])
   fly(axes, seconds, pressed = []) {
     const pad = padFrom(axes, pressed);
@@ -976,12 +1141,15 @@ window.sim = {
 function frame(now) {
   const work = performance.now();
   const pad = Pad.update();
-  if (Pad.justPressed(Pad.START)) reset();
-  if (Pad.justPressed(Pad.X)) chaseCamera = !chaseCamera;
-  if (Pad.justPressed(Pad.Y)) attitudeFromTilt = !attitudeFromTilt;
-  if (Pad.justPressed(Pad.B)) {
-    // the next ROV design (the keyboard's B key is the same button)
-    chooseProfile(PROFILE_NAMES[(PROFILE_NAMES.indexOf(profileName) + 1) % PROFILE_NAMES.length]);
+  // in pilot mode every controller button is the student's
+  if (!pilotMode) {
+    if (Pad.justPressed(Pad.START)) reset();
+    if (Pad.justPressed(Pad.X)) chaseCamera = !chaseCamera;
+    if (Pad.justPressed(Pad.Y)) attitudeFromTilt = !attitudeFromTilt;
+    if (Pad.justPressed(Pad.B)) {
+      // the next ROV design (the keyboard's B key is the same button)
+      chooseProfile(PROFILE_NAMES[(PROFILE_NAMES.indexOf(profileName) + 1) % PROFILE_NAMES.length]);
+    }
   }
 
   owed = Math.min(owed + (now - last) / 1000, 0.25);
@@ -1020,6 +1188,23 @@ applyResolution();
     saved = localStorage.getItem("rov-sim-profile");
   } catch {}
   chooseProfile(asked || saved || "cube");
+}
+setPilotMode(false);
+{
+  // Pilot mode needs sim/pilot.py, which only the local server has. Until (or
+  // unless) it loads, the built-in pilot flies.
+  const ids = Object.fromEntries(PROFILE_NAMES.map((n) => [n, PROFILES[n].thrusters.map((t) => t.id)]));
+  Pilot.start(vehicle.profile, ids)
+    .then((started) => {
+      pilot = started;
+      if (pilot) {
+        pilot.changeProfile(vehicle.profile); // in case 1 or 2 was pressed meanwhile
+        setPilotMode(true);
+      }
+    })
+    .catch((error) => {
+      pythonFailed = String(error.message || error);
+    });
 }
 requestAnimationFrame(frame);
 </script>
