@@ -68,10 +68,7 @@
 <div id="stage">
   <canvas id="screen"></canvas>
   <div class="panel" id="flight"></div>
-  <div class="panel" id="thrusters">
-    <div id="thruster-list"></div>
-    <div id="power"><div id="amps-now"></div><div id="amps-peak"></div><div id="amps-most"></div></div>
-  </div>
+  <div class="panel" id="thrusters"><div id="thruster-list"></div><div id="power"><div id="amps-now"></div><div id="amps-peak"></div><div id="amps-most"></div></div></div>
   <div class="panel" id="perf"></div>
   <div class="panel" id="help">
     Left stick: forward/back and turn. Right stick: sideways and up/down.
@@ -80,7 +77,8 @@
     Start resets. Keyboard: arrows, W A S D, T F G H, "," and "." for the
     claw, B, X, Y, Enter.
     V shows thrust, again adds weight and buoyancy, again hides them.
-    Q changes drawing resolution, I shows what the sim receives.
+    Q changes drawing resolution, I shows what the sim receives,
+    P hides these panels on the right.
   </div>
   <div id="message" hidden><div id="message-text"></div></div>
 </div>
@@ -845,6 +843,12 @@ addEventListener("keydown", (e) => {
     applyResolution();
   } else if (e.code === "KeyV") {
     showForces = (showForces + 1) % 3;
+  } else if (e.code === "KeyP") {
+    // the right-hand panels: performance (top) and help (bottom)
+    for (const id of ["perf", "help"]) {
+      const panel = document.getElementById(id);
+      panel.hidden = !panel.hidden;
+    }
   }
 });
 
@@ -909,7 +913,7 @@ function updatePanels(pad) {
     .map((t) => `${t.name.padEnd(9)} ${bar(t.command)} ${String(Math.round(t.thrust) + 0).padStart(4)} N`)
     .join("\n");
   const volts = vehicle.thrusterModel.volts;
-  showAmps(powerLines.now, "current", vehicle.current(), `A at ${volts} V  (estimate)`);
+  showAmps(powerLines.now, "current", vehicle.current(), `A at ${volts} V`);
   showAmps(powerLines.peak, "peak", peakAmps, "A since Start");
   showAmps(powerLines.most, "all full", vehicle.mostCurrent(), "A");
   perfPanel.textContent =
