@@ -45,15 +45,18 @@ class Stick:
         self.center_x = _average_volts(self._x)
         self.center_y = _average_volts(self._y)
 
+    # + 0.0 turns the -0.0 that a flipped 0.0 makes into 0.0, so a resting stick
+    # never prints as "-0.00".
+
     @property
     def x(self):
         """-1.0 (left) .. 1.0 (right)."""
-        return self._position(self._x.voltage, self.center_x) * self.flip_x
+        return self._position(self._x.voltage, self.center_x) * self.flip_x + 0.0
 
     @property
     def y(self):
         """-1.0 (pushed up) .. 1.0 (pulled down)."""
-        return self._position(self._y.voltage, self.center_y) * self.flip_y
+        return self._position(self._y.voltage, self.center_y) * self.flip_y + 0.0
 
     def _position(self, volts, center):
         # A centered stick sits at half the supply, so it can travel about one

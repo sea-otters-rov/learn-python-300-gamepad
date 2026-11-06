@@ -3,11 +3,12 @@
 Internal notes for designing Part 3's lessons. `CLAUDE.md` holds the hardware
 facts and measurements; this file holds the *teaching* decisions.
 
-**Status, 2026-11-06: the sequence below is agreed with the user. No lesson is
-written yet.** `board/controller.py` is still the spike every game runs against.
-Before any sim lesson can be written, the sim needs the changes listed under
-"What the sim needs" -- the Python-in-the-browser part of that is proven by a
-spike (`spikes/browser_python/`, results below), nothing else is built.
+**Status, 2026-11-06: the sequence below is agreed with the user. The four
+board lessons, 301-304, are written and verified on hardware**, and the sim's
+pilot mode is built and verified (see "What the sim needs"), so the sim
+lessons 305-312 can be written next; `sim/L305_tank_drive` exists only as
+pilot mode's test case. `board/controller.py` is still in `board/` -- 304 is
+its lesson form -- and the games' contract in `CLAUDE.md` still names it.
 
 The design was settled across two sessions: the one that built the hardware,
 games and ROV sim (2026-10-14 .. 2026-11-05), and a lesson-design session
@@ -132,10 +133,28 @@ Per lesson:
   stays on; `board.D20` is `AttributeError: 'module' object has no attribute
   'D20'`. Also proved the picker's board path: `lesson.py 301` rewrote
   `board/code.py` from `import controller` and the board restarted into it.
-- **302** -- the page sees no gamepad until a button is pressed after it
-  loads (`CLAUDE.md`), so the first press *is* the proof. `boot.py` is given
-  and never edited.
-- **303** carries the "level" measurement as given code: the average of a few
+- **302 -- written and verified 2026-11-06** (`board/L302_be_a_gamepad`).
+  The page sees no gamepad until a button is pressed after it loads
+  (`CLAUDE.md`), so the first press *is* the proof. `boot.py` is given and
+  never edited. Keeps 301's button and light, adds `pad.set_button(gamepad.A,
+  pressed)` and `pad.send()`, prints `pad.buttons` as 16 binary digits.
+  Verified with the button on D7: `pad_test.html` (recorded in the browser
+  pane) saw "CircuitPython HID", 6 axes, 16 buttons, and 16 presses as button
+  0 and nothing else; the shortest, 60 ms, was caught at `check_every =
+  0.05`. Trap `gamepad.a` is `AttributeError: 'module' object has no
+  attribute 'a'`.
+- **303 -- written and verified 2026-11-06** (`board/L303_tilt_the_maze`):
+  `board.I2C()` and `imu.IMU`, the same x/y swap as `controller.py`, tip =
+  reading - level, `tip / full_tilt` to `pad.tilt_x/y` and copied to the left
+  stick for the maze; keeps the A button. Verified on the board through
+  `pad_test.html`: right edge down reads x +1.00, far edge down y -1.00, and
+  so on (a first run with the board turned 180 deg mirrored every one, as it
+  should). At rest: level x -0.29, y -0.96 m/s^2 and tip wanders +-0.1, so
+  the stick sits within +-0.02 -- without the level subtraction it would sit
+  at -0.06, -0.19 and the marble creeps (the first try-this). `full_tilt = 0`
+  is `ZeroDivisionError: division by zero`.
+
+  Original plan for 303: carries the "level" measurement as given code: the average of a few
   dozen readings at startup, subtracted in the loop (what `controller.py` does
   with `level_x`/`level_y`). **The SEN0140 driver does not zero the
   accelerometer** -- `imu_calibration.py` removes only gyro bias and
@@ -143,7 +162,24 @@ Per lesson:
   makes the try-this: "delete the level line: what does the marble do?" Also
   here: `full_tilt` (sensitivity) and the tilt dead zone. A dropped draft
   lesson 304 had been calibration alone; the user cut it on 2026-11-06.
-- **304** uses `sticks.py` as given (decided: provide it, don't build it). The
+- **304 -- written and verified 2026-11-06**
+  (`board/L304_finish_the_controller`): `controller.py` rewritten as a lesson
+  on top of 303 -- `busio.I2C` at 400 kHz, the commented mounting block, the
+  nine (button, pin) pairs, tilt and level as in 303, `use_tilt` as a
+  variable, a live print every loop. Verified on the board: the user
+  confirmed both sticks and the buttons on `pad_test.html` (the recorder's
+  tail: left stick up -1.00, down +1.00, right +0.99, left -0.73, A). **The
+  live print costs speed**: ~64 loops/s (295 lines in the verify window)
+  against `controller.py`'s 91 printing twice a second -- still about one
+  reading per game frame. At 100 kHz it fell to 196 lines (the try-this).
+  `sticks.py` now adds `+ 0.0` so a flipped resting stick prints `+0.00`, not
+  `-0.00`. **Two buttons on D7 is `ValueError: RX in use`** -- D7's other
+  name -- so the try-this explains RX. **Classroom gotcha, seen on the test
+  board:** a stick with its x and y wires swapped cannot be fixed by the
+  mounting block's flips (pushing up moves the dot sideways); it needs
+  rewiring.
+
+  Original plan: uses `sticks.py` as given (decided: provide it, don't build it). The
   dead zone is a try-this: `dead_zone = 0` and watch the ROV creep in 305.
   Stick or tilt for the maze is a variable, not a button toggle. **This lesson
   also wires every button**, by the course's pin picture (below), so that **at

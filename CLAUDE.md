@@ -208,8 +208,9 @@ SEN0140 is turned so its x and y are the breadboard's y and x
 swap cannot drift out of step with the loop. A board built another way changes
 only that block; each comment says what to change. After the 2026-11-06
 rewrite (the same mapping, moved from minus signs and an `ay, ax, az` unpack in
-two places) the user confirmed both sticks on a second, freshly flashed board;
-**tilt direction is not yet re-checked**. That board runs 91 loops/s, not 104:
+two places) the user confirmed both sticks on a second, freshly flashed board, and tilt
+direction was confirmed through lesson 303, which uses the same swap (right
+edge down reads +1 on axes[0]/[4], far edge down -1 on [1]/[5]). That board runs 91 loops/s, not 104:
 `spikes/loop_cost.py` puts four stick axes at 9.2 ms there (8.3 in the table
 below) and `board_acceleration()` at +0.006 ms. `spikes/wiring_check.py`
 diagnoses a silent I2C bus (pull-ups present? chips answer, either way round?).
