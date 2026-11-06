@@ -36,18 +36,14 @@ CENTER_READINGS = 40  # averaged to find where a stick rests
 class Stick:
     """One thumbstick: two ADS1115 channels and, optionally, its push switch."""
 
-    def __init__(self, ads, x_channel, y_channel, click_pin=None, dead_zone=0.06):
+    def __init__(self, ads, x_channel, y_channel, dead_zone=0.06, flip_x=1, flip_y=1):
         self.dead_zone = dead_zone
-        self.flip_x = 1  # set to -1 if this stick reads backwards
-        self.flip_y = 1
+        self.flip_x = flip_x  # set to -1 if this stick reads backwards
+        self.flip_y = flip_y
         self._x = AnalogIn(ads, x_channel)
         self._y = AnalogIn(ads, y_channel)
         self.center_x = _average_volts(self._x)
         self.center_y = _average_volts(self._y)
-        self._click = None
-        if click_pin is not None:
-            self._click = digitalio.DigitalInOut(click_pin)
-            self._click.switch_to_input(pull=digitalio.Pull.UP)  # pressed reads False
 
     @property
     def x(self):
@@ -58,11 +54,6 @@ class Stick:
     def y(self):
         """-1.0 (pushed up) .. 1.0 (pulled down)."""
         return self._position(self._y.voltage, self.center_y) * self.flip_y
-
-    @property
-    def pressed(self):
-        """True while the stick is pushed down. Always False with no switch."""
-        return self._click is not None and not self._click.value
 
     def _position(self, volts, center):
         # A centered stick sits at half the supply, so it can travel about one
@@ -85,9 +76,9 @@ def _average_volts(channel):
     return total / CENTER_READINGS
 
 
-def connect(i2c, dead_zone=0.06, left_click=board.D7, right_click=board.D8):
+def connect(i2c, dead_zone=0.06):
     """Both sticks on the ADS1115: (left, right). Left is A0/A1, right is A2/A3."""
     ads = ADS1115(i2c, address=ADDRESS, data_rate=SAMPLES_PER_SECOND)
-    left = Stick(ads, 0, 1, left_click, dead_zone)
-    right = Stick(ads, 2, 3, right_click, dead_zone)
+    left = Stick(ads, 0, 1, dead_zone)
+    right = Stick(ads, 2, 3, dead_zone)
     return left, right

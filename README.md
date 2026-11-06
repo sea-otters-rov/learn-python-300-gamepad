@@ -88,6 +88,8 @@ receiving.
   with tilt: set `use_tilt = True` in `board\controller.py`
 - **ROV Sim** -- fly a ROV around a pool, collect five crabs with the claw,
   drop them in the basket. A closes the claw, B opens it, X switches camera,
-  Y switches pitch between tilt and holding level
+  Y switches pitch and roll between tilt and holding level. **P** switches
+  between two ROV designs (a cube and a triangle) and **V** shows the forces
+  on it. Their numbers live in `games\rov_profiles.js`, ready to change
 
 Changes pushed to `main` under `games\` publish themselves to GitHub Pages.

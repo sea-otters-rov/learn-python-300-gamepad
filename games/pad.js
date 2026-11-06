@@ -9,16 +9,37 @@
 //   axes[4], axes[5]    tilt, like a third stick: right edge down is +1 in
 //                       [4], far edge down is -1 in [5] (a stick pushed away)
 //   buttons[0..3]       A, B, X, Y
+//   LB, RB, LT, RT = 4, 5, 6, 7
 //   buttons[9]          Start
 //   buttons[10], [11]   left and right stick clicks
 //   buttons[12..15]     D-pad up, down, left, right
 //
 // With no board the keyboard stands in, so a game can be tried without
 // hardware: arrows are the left stick, W A S D the right stick, T F G H the
-// tilt, Space is A, and B, X, Y and Enter are B, X, Y and Start. Press I to
-// show what the game receives.
+// tilt, Space is A, B, X, Y and Enter are B, X, Y and Start, and "," and "."
+// are LB and RB. Press I to show what the game receives.
 
+const Axes = {
+  LEFT_X: 0,
+  LEFT_Y: 1,
+  RIGHT_X: 2,
+  RIGHT_Y: 3,
+  TILT_X: 4,
+  TILT_Y: 5
+}
+const Buttons = {
+  A: 0,
+  B: 1,
+  X: 2,
+  Y: 3,
+  LB: 4,
+  RB: 5,
+  LT: 6,
+  RT: 7,
+  START: 9,
+}
 const Pad = (() => {
+  
   const state = {
     source: "none", // "gamepad", "keyboard" or "none"
     name: "",
@@ -71,6 +92,8 @@ const Pad = (() => {
       state.buttons[1] = keys.has("KeyB");
       state.buttons[2] = keys.has("KeyX");
       state.buttons[3] = keys.has("KeyY");
+      state.buttons[4] = keys.has("Comma"); // LB: the "<" key
+      state.buttons[5] = keys.has("Period"); // RB: the ">" key
       state.buttons[9] = keys.has("Enter");
     }
     if (!inspector.hidden) showInspector();
@@ -92,5 +115,5 @@ const Pad = (() => {
       `buttons  ${held.length ? held.join(" ") : "-"}`;
   }
 
-  return { state, update, justPressed };
+  return { state, update, justPressed, ...Axes, ...Buttons };
 })();

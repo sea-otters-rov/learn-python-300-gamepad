@@ -11,6 +11,8 @@
     --text: #e8f4f4;
     --dim: #8fb3b8;
     --accent: #ffcf4a;
+    --warn: #ffd84a;
+    --danger: #ff5a5a;
     --panel: #0009;
   }
   html, body { height: 100%; margin: 0; }
@@ -36,6 +38,10 @@
     pointer-events: none;
   }
   #flight { top: 10px; left: 10px; }
+  #thrusters { bottom: 10px; left: 10px; font-size: 12px; }
+  #power { margin-top: 1.2em; }
+  #power .near { color: var(--warn); }
+  #power .over { color: var(--danger); font-weight: 700; }
   #perf { top: 10px; right: 10px; color: var(--dim); text-align: right; }
   #help { bottom: 10px; right: 10px; color: var(--dim); white-space: normal; max-width: 380px; font: 12px system-ui, sans-serif; }
   #message {
@@ -62,25 +68,32 @@
 <div id="stage">
   <canvas id="screen"></canvas>
   <div class="panel" id="flight"></div>
+  <div class="panel" id="thrusters">
+    <div id="thruster-list"></div>
+    <div id="power"><div id="amps-now"></div><div id="amps-peak"></div><div id="amps-most"></div></div>
+  </div>
   <div class="panel" id="perf"></div>
   <div class="panel" id="help">
     Left stick: forward/back and turn. Right stick: sideways and up/down.
-    Tilt: pitch and roll. A closes the claw, B opens it. X changes camera,
-    Y switches pitch between tilt and level, Start resets.
-    Keyboard: arrows, W A S D, T F G H, Space, B, X, Y, Enter.
-    Q changes drawing resolution, I shows what the sim receives.
+    Tilt: pitch and roll. LB closes the claw, RB opens it. B changes ROV,
+    X changes camera, Y switches pitch and roll between tilt and level,
+    Start resets. Keyboard: arrows, W A S D, T F G H, "," and "." for the
+    claw, B, X, Y, Enter.
+    V shows forces, Q changes drawing resolution, I shows what the sim receives.
   </div>
   <div id="message" hidden><div id="message-text"></div></div>
 </div>
 <script src="pad.js"></script>
 <script type="module">
-// ROV Sim -- crab collection.
+// ROV Sim -- crab collection, with real-ish physics.
 //
 // Pick up every crab from the pool floor and drop it in the basket at the far
 // end, just under the surface. The clock starts at the first input and stops
 // when the last crab lands.
 //
-// The sim takes what the pilot WANTS, in fixed slots, and nothing else:
+// The ROV is described entirely by numbers in rov_profiles.js and moved only
+// by its thrusters (rov_physics.js). The pilot says what they WANT; the
+// pilot assist turns that into a command for every thruster.
 //
 //   axes[0]  turn       -1 left  .. +1 right
 //   axes[1]  forward    -1 ahead .. +1 astern   (a stick pushed up reads -1)
@@ -88,10 +101,13 @@
 //   axes[3]  up/down    -1 rise  .. +1 dive
 //   axes[4]  roll       -1 left side down .. +1 right side down
 //   axes[5]  pitch      -1 nose down .. +1 nose up
-//   buttons[0]  A      close the claw
-//   buttons[1]  B      open the claw
+//   buttons[1]  B      switch to the next ROV design
 //   buttons[2]  X      change camera
-//   buttons[3]  Y      pitch/roll follows tilt, or holds level by itself
+//   buttons[3]  Y      pitch and roll follow tilt, or the ROV holds level
+//   buttons[4]  LB     close the claw
+//   buttons[5]  RB     open the claw
+//   buttons[6]  LT     left trigger
+//   buttons[7]  RT     right trigger
 //   buttons[9]  Start  start again
 //
 // Which stick, tilt or button feeds which slot is the board's business; this
@@ -99,42 +115,53 @@
 
 import * as THREE from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { PROFILES } from "./rov_profiles.js";
+import { Vehicle, PilotAssist } from "./rov_physics.js";
 
 // ---- things worth changing ----------------------------------------------------
 
 const CRAB_COUNT = 5;
 const CRAB_SEED = 2026; // same seed, same crabs in the same places
+const CRAB_WET_WEIGHT = 0.5; // N: a held crab pulls the claw down this much
 
 const POOL = { width: 20, length: 14, depth: 4.5 }; // m: x, z, y
 // the basket: far end of the pool, just under the surface
 const BASKET = { x: 0, z: -5.4, size: 1.4, top: -0.5, height: 0.7 };
 const START = { x: 0, y: -1.5, z: 5.5, heading: 0 };
 
-// ---- tuning -------------------------------------------------------------------
-
-const PHYSICS_STEP = 1 / 120;
-const FORWARD_ACCEL = 1.0; // m/s^2 at full stick
-const SIDEWAYS_ACCEL = 0.7;
-const VERTICAL_ACCEL = 0.7;
-const TURN_ACCEL = 2.0; // rad/s^2
-const WATER_DRAG = 1.2; // 1/s: top speed is accel / drag, so ~0.8 m/s ahead
-const TURN_DRAG = 2.5; // 1/s: top turn rate ~46 deg/s
-const BUOYANCY = 0.04; // m/s^2 upward: a real ROV is trimmed slightly light
-const CURRENT = new THREE.Vector3(0, 0, 0); // a pool has none; a lake would
+// ---- pilot assist -------------------------------------------------------------
 
 const MAX_PITCH = THREE.MathUtils.degToRad(35); // at full tilt
 const MAX_ROLL = THREE.MathUtils.degToRad(30);
-const ATTITUDE_GAIN = 1.0; // 1/s: how briskly it follows the tilt
-const ATTITUDE_RATE = THREE.MathUtils.degToRad(60); // deg/s at most
+const ASSIST = {
+  attitudeRate: THREE.MathUtils.degToRad(60), // the target angle moves no faster
+  // How briskly pitch and roll reach the angle asked for. Measured on both
+  // profiles: 90% of a full tilt in ~1.8 s, no overshoot. It looks
+  // under-damped on paper, but the thrusters' spin-up lag adds braking of its
+  // own -- at 2.0 and 1.0 the same move took 5.3 s.
+  stabilizerSpeed: 4.0, // rad/s: bigger snaps to the target angle quicker
+  stabilizerDamping: 0.7, // smaller is snappier, until it overshoots
+  stabilizerIntegral: 1.0, // 1/s: how fast it learns a steady load, like a crab
+  integralWithin: THREE.MathUtils.degToRad(5), // ...but only this close to the target
+  maxTurnRate: THREE.MathUtils.degToRad(60), // at full stick
+  turnResponse: 4.0, // 1/s: how quickly a turn starts and stops
+};
 
-const ROV_RADIUS = 0.35; // m, for bumping into walls and the basket
-const CLEARANCE = 0.25; // m, ROV centre above the floor
-const SURFACE = -0.25;
-const CLAW_TIP = new THREE.Vector3(0, -0.13, -0.47); // in the ROV's own frame
+// MATE requires a 15 A fuse. A fuse carries a little over its rating for a
+// moment, so the power readout turns yellow over 15 A and red over 18 A.
+const CURRENT_YELLOW = 15; // A
+const CURRENT_RED = 18; // A
+
+// ---- the rest -----------------------------------------------------------------
+
+const PHYSICS_STEP = 1 / 240;
+const CURRENT = new THREE.Vector3(0, 0, 0); // a pool has none; a lake would
+const SURFACE = 0;
 const GRAB_RADIUS = 0.16; // m from claw tip to crab centre
 const CLAW_SPEED = 4; // rad/s the jaws swing
 const CRAB_HALF_HEIGHT = 0.05;
 const SINK_SPEED = 0.5; // m/s a dropped crab falls
+const ONBOARD_LOOK_DOWN = THREE.MathUtils.degToRad(25); // so the claw is in view
 
 const WATER_COLOR = 0x1b6f80;
 const FOG_DENSITY = 0.055;
@@ -341,88 +368,183 @@ const snowGeometry = new THREE.BufferGeometry();
   scene.add(new THREE.Points(snowGeometry, new THREE.PointsMaterial({ color: 0xe0f4f0, size: 0.03 })));
 }
 
-// ---- the ROV ------------------------------------------------------------------
+// ---- the ROV, built from its profile ------------------------------------------
 
-const rovModel = new THREE.Group();
-const rovBody = new THREE.Group(); // hidden from the onboard camera, which sits inside it
-rovModel.add(rovBody);
-const jaws = [];
-{
+const FULL_ARROW = 0.4; // m: how long a thruster's arrow is at full thrust
+const ARROW_FROM = 0.02; // fraction of full thrust below which there is no arrow
+
+function buildModel(vehicle) {
+  const p = vehicle.profile;
+  const group = new THREE.Group(); // sits at the center of mass
+  const shape = new THREE.Group(); // profile coordinates: the center of the shape
+  shape.position.copy(vehicle.shapeOffset);
+  group.add(shape);
+  const body = new THREE.Group(); // hidden from the onboard camera, which sits inside it
+  shape.add(body);
+
   const frame = flat(0x3a3f45);
   const foam = flat(0xf2c230);
   const black = flat(0x15181b);
-  const add = (parent, geometry, material, x, y, z) => {
-    const mesh = new THREE.Mesh(geometry, material);
+  const box = (parent, [w, h, d], [x, y, z], material) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material);
     mesh.position.set(x, y, z);
     parent.add(mesh);
     return mesh;
   };
-  add(rovBody,new THREE.BoxGeometry(0.56, 0.12, 0.44), foam, 0, 0.17, 0);
-  add(rovBody,new THREE.BoxGeometry(0.6, 0.04, 0.48), frame, 0, -0.15, 0);
-  for (const [x, z] of [[-0.27, -0.21], [0.27, -0.21], [-0.27, 0.21], [0.27, 0.21]]) {
-    add(rovBody,new THREE.BoxGeometry(0.04, 0.3, 0.04), frame, x, 0, z);
-    const thruster = add(rovBody,new THREE.CylinderGeometry(0.055, 0.055, 0.12, 8), black, x * 1.15, -0.04, z * 1.15);
-    thruster.rotation.set(Math.PI / 2, 0, (Math.sign(x * z) * Math.PI) / 4);
-  }
-  for (const x of [-0.16, 0.16]) add(rovBody,new THREE.CylinderGeometry(0.055, 0.055, 0.1, 8), black, x, 0.04, 0);
-  add(rovBody,new THREE.SphereGeometry(0.07, 8, 6), new THREE.MeshLambertMaterial({ color: 0x9fd8ff }), 0, 0.02, -0.25);
 
-  // the claw: an arm forward from the bottom of the frame, and two jaws
+  if (p.shape.kind === "cube") {
+    const s = p.shape.size;
+    const t = 0.03;
+    // bars inset by half their thickness, so the frame's OUTSIDE is the
+    // profile's size -- where the corners that bump into things are
+    const h = s / 2 - t / 2;
+    for (const a of [-h, h]) {
+      for (const b of [-h, h]) {
+        box(body, [s, t, t], [0, a, b], frame);
+        box(body, [t, s, t], [a, 0, b], frame);
+        box(body, [t, t, s], [a, b, 0], frame);
+      }
+    }
+    // the float, up top where the center of buoyancy is
+    // box(body, [s - 0.06, 0.1, s - 0.06], [0, h - 0.08, 0], foam);
+    // an electronics tube in the middle
+    const can = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.3, 10), black);
+    can.rotation.x = Math.PI / 2;
+    can.position.y = -0.05;
+    body.add(can);
+  } else {
+    // an open frame, so the thrusters inside stay visible: bars along the top
+    // and bottom edges, and a post at each corner. Corners as in the profile,
+    // with the nose pointing forward (-z).
+    const edge = p.shape.edge;
+    const R = edge / Math.sqrt(3); // center to corner
+    const r = edge / (2 * Math.sqrt(3)); // center to the middle of an edge
+    const t = 0.03;
+    // inset by half a bar, so the frame's top and bottom are the profile's
+    const half = p.shape.height / 2 - t / 2;
+    const corners = [[0, -R], [edge / 2, r], [-edge / 2, r]];
+    const bar = (from, to) => {
+      const a = new THREE.Vector3(...from);
+      const b = new THREE.Vector3(...to);
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(t, t, a.distanceTo(b)), frame);
+      mesh.position.copy(a).add(b).multiplyScalar(0.5);
+      mesh.lookAt(b); // turns the box's long side (z) to point from a to b
+      body.add(mesh);
+    };
+    corners.forEach(([x, z], i) => {
+      const [nx, nz] = corners[(i + 1) % 3];
+      for (const y of [half, -half]) bar([x, y, z], [nx, y, nz]);
+      bar([x, -half, z], [x, half, z]);
+    });
+  }
+
+  // thrusters: each a short tube along its own direction, glowing green when
+  // it pushes forwards and red when it pushes backwards
+  const glows = [];
+  const arrows = [];
+  for (const t of p.thrusters) {
+    const material = new THREE.MeshLambertMaterial({ color: 0x15181b });
+    const { radius, length } = p.thruster;
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 10), material);
+    tube.position.fromArray(t.position);
+    tube.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...t.direction).normalize());
+    body.add(tube);
+    glows.push(material);
+    const arrow = new THREE.ArrowHelper(new THREE.Vector3(...t.direction), tube.position, 0.1, 0x55ff88, 0.06, 0.04);
+    onTop(arrow);
+    shape.add(arrow);
+    arrows.push(arrow);
+  }
+
+  // the forces view: weight down from the center of mass, lift up from the
+  // center of buoyancy
+  const forces = new THREE.Group();
+  const dot = (where, color) => {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 6), new THREE.MeshBasicMaterial({ color }));
+    mesh.position.fromArray(where);
+    onTop(mesh);
+    forces.add(mesh);
+  };
+  dot(p.centerOfMass, 0xff4040);
+  dot(p.centerOfBuoyancy, 0x4090ff);
+  const weightArrow = new THREE.ArrowHelper(new THREE.Vector3(0, -1, 0), new THREE.Vector3(...p.centerOfMass), 0.3, 0xff4040, 0.06, 0.04);
+  const liftArrow = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...p.centerOfBuoyancy), 0.3, 0x4090ff, 0.06, 0.04);
+  onTop(weightArrow);
+  onTop(liftArrow);
+  forces.add(weightArrow, liftArrow);
+  shape.add(forces);
+
+  // the camera dome
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 6), new THREE.MeshLambertMaterial({ color: 0x9fd8ff }));
+  dome.position.fromArray(p.camera);
+  body.add(dome);
+
+  // the claw: an arm reaching forward to the claw point, and two jaws
   const claw = new THREE.Group();
-  claw.position.set(0, -0.13, -0.27);
-  rovModel.add(claw);
-  add(claw, new THREE.BoxGeometry(0.05, 0.04, 0.1), frame, 0, 0, -0.05);
+  claw.position.set(p.claw[0], p.claw[1], p.claw[2] + 0.2);
+  shape.add(claw);
+  box(claw, [0.05, 0.04, 0.1], [0, 0, -0.05], frame);
+  const jaws = [];
   for (const side of [-1, 1]) {
     const pivot = new THREE.Group();
     pivot.position.set(side * 0.03, 0, -0.1);
     claw.add(pivot);
-    add(pivot, new THREE.BoxGeometry(0.02, 0.035, 0.1), flat(0xd0d4d8), 0, 0, -0.05);
+    box(pivot, [0.02, 0.035, 0.1], [0, 0, -0.05], flat(0xd0d4d8));
     pivot.userData.side = side;
     jaws.push(pivot);
   }
-  scene.add(rovModel);
+
+  return { group, body, glows, arrows, forces, jaws };
 }
 
-const rov = {
-  position: new THREE.Vector3(),
-  velocity: new THREE.Vector3(),
-  heading: 0, // radians; 0 faces -z (towards the basket), positive turns left
-  turnRate: 0,
-  pitch: 0, // radians; positive is nose up
-  roll: 0, // radians; positive is right side up
-  attitude: new THREE.Quaternion(),
-  clawClosed: false,
-  clawAngle: 0.5,
-  held: null,
-};
-
-const euler = new THREE.Euler(0, 0, 0, "YXZ");
-function updateAttitude() {
-  rov.attitude.setFromEuler(euler.set(rov.pitch, rov.heading, rov.roll));
-}
-
-const tipWorld = new THREE.Vector3();
-function clawTip() {
-  return tipWorld.copy(CLAW_TIP).applyQuaternion(rov.attitude).add(rov.position);
+function onTop(object) {
+  // drawn over everything, so a force arrow inside the frame stays visible
+  object.traverse((o) => {
+    if (o.material) {
+      o.material.depthTest = false;
+      o.material.transparent = true;
+    }
+    o.renderOrder = 10;
+  });
 }
 
 // ---- game state ---------------------------------------------------------------
+
+const PROFILE_NAMES = Object.keys(PROFILES);
+let profileName = "cube";
+let vehicle;
+let assist;
+let model;
+
+const rov = { clawClosed: false, clawAngle: 0.5, held: null };
 
 let clock = 0;
 let running = false; // the clock waits for the first input
 let finished = false;
 let chaseCamera = true;
-let pitchFromTilt = true; // false: the ROV holds itself level in pitch (Y)
+let attitudeFromTilt = true; // false: the ROV holds itself level (Y)
+let showForces = false;
+let peakAmps = 0; // the most current drawn since the last reset
+
+function chooseProfile(name) {
+  profileName = PROFILES[name] ? name : "cube";
+  if (model) scene.remove(model.group);
+  vehicle = new Vehicle(PROFILES[profileName]);
+  assist = new PilotAssist(vehicle, ASSIST);
+  model = buildModel(vehicle);
+  scene.add(model.group);
+  try {
+    localStorage.setItem("rov-sim-profile", profileName);
+  } catch {}
+  reset();
+}
 
 function reset() {
-  rov.position.set(START.x, START.y, START.z);
-  rov.velocity.set(0, 0, 0);
-  rov.heading = START.heading;
-  rov.turnRate = 0;
-  rov.pitch = rov.roll = 0;
+  vehicle.place(new THREE.Vector3(START.x, START.y, START.z), START.heading);
+  assist.reset();
+  peakAmps = 0;
   rov.clawClosed = false;
   rov.held = null;
-  updateAttitude();
   placeCrabsAtHome();
   clock = 0;
   running = false;
@@ -443,7 +565,7 @@ function collectedCount() {
 
 function bestTime() {
   try {
-    return Number(localStorage.getItem(`rov-sim-crabs-${CRAB_COUNT}`)) || null;
+    return Number(localStorage.getItem(`rov-sim-crabs-${CRAB_COUNT}-${profileName}`)) || null;
   } catch {
     return null;
   }
@@ -455,11 +577,12 @@ function finish() {
   const record = best === null || clock < best;
   if (record) {
     try {
-      localStorage.setItem(`rov-sim-crabs-${CRAB_COUNT}`, clock.toFixed(2));
+      localStorage.setItem(`rov-sim-crabs-${CRAB_COUNT}-${profileName}`, clock.toFixed(2));
     } catch {}
   }
   showMessage(
-    `<strong>All ${CRAB_COUNT} crabs collected</strong><br>${clock.toFixed(1)} s` +
+    `<strong>All ${CRAB_COUNT} crabs collected</strong><br>${clock.toFixed(1)} s ` +
+      `with the ${vehicle.profile.name.toLowerCase()}` +
       (record ? " &nbsp;-- best time!" : ` &nbsp;(best ${best.toFixed(1)} s)`) +
       "<br>Start to try again",
   );
@@ -467,99 +590,90 @@ function finish() {
 
 // ---- physics ------------------------------------------------------------------
 
-const thrust = new THREE.Vector3();
-const push = new THREE.Vector3();
-const throughWater = new THREE.Vector3();
-
-function approach(angle, target, dt) {
-  const rate = THREE.MathUtils.clamp((target - angle) * ATTITUDE_GAIN, -ATTITUDE_RATE, ATTITUDE_RATE);
-  return angle + rate * dt;
-}
-
 function physics(pad, dt) {
-  const turn = pad.axes[0] || 0;
-  const forward = -(pad.axes[1] || 0);
-  const sideways = pad.axes[2] || 0;
-  const rise = -(pad.axes[3] || 0);
-  const rollIn = pad.axes[4] || 0;
-  const pitchIn = pad.axes[5] || 0;
-
   if (!running && !finished) {
-    running = pad.axes.some((a) => Math.abs(a) > 0.05) || pad.buttons[0] || pad.buttons[1];
+    running = pad.axes.some((a) => Math.abs(a) > 0.05) || pad.buttons[4] || pad.buttons[5];
   }
 
-  // turning has momentum; pitch and roll follow the tilt, like a ROV whose
-  // thrusters hold whatever angle it is told to
-  rov.turnRate += (-turn * TURN_ACCEL - TURN_DRAG * rov.turnRate) * dt;
-  rov.heading += rov.turnRate * dt;
-  // in level mode the ROV holds its nose level whatever the board does
-  const targetPitch = pitchFromTilt ? pitchIn * MAX_PITCH : 0;
-  const targetRoll = pitchFromTilt ? -rollIn * MAX_ROLL : 0;
-  rov.pitch = approach(rov.pitch, targetPitch, dt);
-  rov.roll = approach(rov.roll, targetRoll, dt);
-  updateAttitude();
-
-  // thrusters push along the ROV's OWN axes, so nose-down plus forward also dives
-  thrust.set(sideways * SIDEWAYS_ACCEL, rise * VERTICAL_ACCEL, -forward * FORWARD_ACCEL);
-  thrust.applyQuaternion(rov.attitude);
-  push.copy(thrust);
-  push.y += BUOYANCY;
-  push.addScaledVector(throughWater.subVectors(rov.velocity, CURRENT), -WATER_DRAG);
-  rov.velocity.addScaledVector(push, dt);
-  rov.position.addScaledVector(rov.velocity, dt);
-
-  keepInsidePool();
-  keepOutOfBasket();
+  const rollIn = pad.axes[4] || 0;
+  const pitchIn = pad.axes[5] || 0;
+  assist.fly(
+    {
+      turn: pad.axes[0] || 0,
+      forward: -(pad.axes[1] || 0),
+      sideways: pad.axes[2] || 0,
+      rise: -(pad.axes[3] || 0),
+      // in level mode the ROV holds pitch and roll at zero whatever the board does
+      pitch: attitudeFromTilt ? pitchIn * MAX_PITCH : 0,
+      roll: attitudeFromTilt ? -rollIn * MAX_ROLL : 0,
+    },
+    dt,
+  );
+  moveVehicle(dt);
   workClaw(pad, dt);
   moveCrabs(dt);
 
   if (running && !finished) clock += dt;
 }
 
-function stop(axis, limit, isMax) {
-  const value = rov.position[axis];
-  if (isMax ? value > limit : value < limit) {
-    rov.position[axis] = limit;
-    const v = rov.velocity[axis];
-    if (isMax ? v > 0 : v < 0) rov.velocity[axis] = 0;
-  }
+function moveVehicle(dt) {
+  vehicle.step(dt, CURRENT);
+  keepInsidePool();
+  peakAmps = Math.max(peakAmps, vehicle.current());
 }
+
+const UP = new THREE.Vector3(0, 1, 0);
+const DOWN = new THREE.Vector3(0, -1, 0);
+const WALL_NORMALS = {
+  left: new THREE.Vector3(1, 0, 0),
+  right: new THREE.Vector3(-1, 0, 0),
+  far: new THREE.Vector3(0, 0, 1),
+  near: new THREE.Vector3(0, 0, -1),
+};
+const corner = new THREE.Vector3();
+const basketNormal = new THREE.Vector3();
 
 function keepInsidePool() {
-  stop("x", -HALF_W + ROV_RADIUS, false);
-  stop("x", HALF_W - ROV_RADIUS, true);
-  stop("z", -HALF_L + ROV_RADIUS, false);
-  stop("z", HALF_L - ROV_RADIUS, true);
-  stop("y", FLOOR + CLEARANCE, false);
-  stop("y", SURFACE, true);
-  // the claw tip reaches further than the body, so it gets its own floor check
-  const tip = clawTip();
-  const dig = FLOOR + 0.03 - tip.y;
-  if (dig > 0) {
-    rov.position.y += dig;
-    if (rov.velocity.y < 0) rov.velocity.y = 0;
+  // Every hull point (the corners, and the claw) is checked against the
+  // floor, surface, walls and basket. A corner that touches tips the ROV.
+  for (const offset of vehicle.hull) {
+    const p = vehicle.toWorld(offset, corner);
+    if (p.y < FLOOR) vehicle.contact(offset, UP, FLOOR - p.y);
+    else if (p.y > SURFACE) vehicle.contact(offset, DOWN, p.y - SURFACE);
+    vehicle.toWorld(offset, corner);
+    if (corner.x < -HALF_W) vehicle.contact(offset, WALL_NORMALS.left, -HALF_W - corner.x);
+    else if (corner.x > HALF_W) vehicle.contact(offset, WALL_NORMALS.right, corner.x - HALF_W);
+    vehicle.toWorld(offset, corner);
+    if (corner.z < -HALF_L) vehicle.contact(offset, WALL_NORMALS.far, -HALF_L - corner.z);
+    else if (corner.z > HALF_L) vehicle.contact(offset, WALL_NORMALS.near, corner.z - HALF_L);
+    vehicle.toWorld(offset, corner);
+    const depth = insideBasketSolid(corner, basketNormal);
+    if (depth > 0) vehicle.contact(offset, basketNormal, depth);
   }
 }
 
-function keepOutOfBasket() {
-  // the basket is solid: push the ROV out along the shallowest side
-  const half = BASKET.size / 2 + ROV_RADIUS;
-  const dx = rov.position.x - BASKET.x;
-  const dz = rov.position.z - BASKET.z;
-  const below = basketBottom - ROV_RADIUS;
-  const above = BASKET.top + ROV_RADIUS;
-  const y = rov.position.y;
-  if (Math.abs(dx) >= half || Math.abs(dz) >= half || y <= below || y >= above) return;
+function insideBasketSolid(point, normal) {
+  // the basket as a solid box: how far in, and which way is the shortest out
+  const half = BASKET.size / 2;
+  const dx = point.x - BASKET.x;
+  const dz = point.z - BASKET.z;
+  if (Math.abs(dx) >= half || Math.abs(dz) >= half) return 0;
+  if (point.y >= BASKET.top || point.y <= basketBottom) return 0;
   const outs = [
-    ["x", half - Math.abs(dx), Math.sign(dx) || 1],
-    ["z", half - Math.abs(dz), Math.sign(dz) || 1],
-    ["y", above - y, 1],
-    ["y", y - below, -1],
+    [half - Math.abs(dx), Math.sign(dx) || 1, 0, 0],
+    [half - Math.abs(dz), 0, 0, Math.sign(dz) || 1],
+    [BASKET.top - point.y, 0, 1, 0],
+    [point.y - basketBottom, 0, -1, 0],
   ];
-  outs.sort((a, b) => a[1] - b[1]);
-  const [axis, depth, direction] = outs[0];
-  rov.position[axis] += depth * direction;
-  if (rov.velocity[axis] * direction < 0) rov.velocity[axis] = 0;
+  outs.sort((a, b) => a[0] - b[0]);
+  const [depth, x, y, z] = outs[0];
+  normal.set(x, y, z);
+  return depth;
+}
+
+const tipWorld = new THREE.Vector3();
+function clawTip() {
+  return vehicle.toWorld(vehicle.clawOffset, tipWorld);
 }
 
 function crabInReach() {
@@ -578,18 +692,27 @@ function crabInReach() {
 }
 
 function workClaw(pad, dt) {
-  if (pad.buttons[0] && !rov.clawClosed) {
+  if (pad.buttons[4] && !rov.clawClosed) {
     rov.clawClosed = true;
     const crab = crabInReach();
     if (crab) {
       crab.state = "held";
       rov.held = crab;
+      // a held crab hangs off the front of the ROV and pulls it nose-down, and
+      // the claw's servo draws current to keep its grip
+      vehicle.payload = { offset: vehicle.clawOffset, wetWeight: CRAB_WET_WEIGHT };
+      vehicle.clawCurrent = vehicle.profile.clawHoldCurrent;
     }
-  } else if (pad.buttons[1] && rov.clawClosed) {
+  } else if (pad.buttons[5] && rov.clawClosed) {
     rov.clawClosed = false;
     if (rov.held) {
+      // let go from where the claw is NOW, not where it was last drawn
+      rov.held.position.copy(clawTip());
+      rov.held.position.y -= 0.02;
       rov.held.state = "sinking";
       rov.held = null;
+      vehicle.payload = null;
+      vehicle.clawCurrent = 0;
     }
   }
   const target = rov.clawClosed ? (rov.held ? 0.18 : 0.02) : 0.5;
@@ -623,38 +746,57 @@ function moveCrabs(dt) {
 const ahead = new THREE.Vector3();
 const chaseSpot = new THREE.Vector3();
 const lookSpot = new THREE.Vector3();
-const lookDown = new THREE.Quaternion().setFromEuler(new THREE.Euler(THREE.MathUtils.degToRad(-20), 0, 0));
-const ONBOARD_CAMERA = new THREE.Vector3(0, 0.03, -0.22);
+const lookDown = new THREE.Quaternion().setFromEuler(new THREE.Euler(-ONBOARD_LOOK_DOWN, 0, 0));
 
 function placeCamera(blend) {
   if (chaseCamera) {
-    ahead.set(-Math.sin(rov.heading), 0, -Math.cos(rov.heading));
-    chaseSpot.copy(rov.position).addScaledVector(ahead, -1.9);
+    // the chase camera follows the heading but stays level, so pitch and roll
+    // are easy to see on the model
+    const heading = vehicle.angles().heading;
+    ahead.set(-Math.sin(heading), 0, -Math.cos(heading));
+    chaseSpot.copy(vehicle.position).addScaledVector(ahead, -1.9);
     chaseSpot.y += 0.85;
     camera.position.lerp(chaseSpot, blend);
     // never let the camera end up behind a wall, where it would see nothing
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -HALF_W + 0.1, HALF_W - 0.1);
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -HALF_L + 0.1, HALF_L - 0.1);
     camera.position.y = THREE.MathUtils.clamp(camera.position.y, FLOOR + 0.1, -0.1);
-    lookSpot.copy(rov.position).addScaledVector(ahead, 1.0);
+    lookSpot.copy(vehicle.position).addScaledVector(ahead, 1.0);
     lookSpot.y -= 0.25;
     camera.lookAt(lookSpot);
   } else {
     // the pilot's real view: fixed to the ROV, tipped down to see the claw
-    camera.position.copy(ONBOARD_CAMERA).applyQuaternion(rov.attitude).add(rov.position);
-    camera.quaternion.copy(rov.attitude).multiply(lookDown);
+    vehicle.toWorld(vehicle.cameraOffset, camera.position);
+    camera.quaternion.copy(vehicle.attitude).multiply(lookDown);
   }
   // onboard, the claw stays in view the way it does on a real ROV's camera
-  rovBody.visible = chaseCamera;
+  model.body.visible = chaseCamera;
+  model.forces.visible = showForces && chaseCamera;
 }
 
+const arrowWay = new THREE.Vector3();
 function drawRov() {
-  rovModel.position.copy(rov.position);
-  rovModel.quaternion.copy(rov.attitude);
-  for (const jaw of jaws) jaw.rotation.y = jaw.userData.side * -rov.clawAngle;
+  model.group.position.copy(vehicle.position);
+  model.group.quaternion.copy(vehicle.attitude);
+  for (const jaw of model.jaws) jaw.rotation.y = jaw.userData.side * -rov.clawAngle;
+  const full = vehicle.thrusterModel.forward;
+  vehicle.thrusters.forEach((t, i) => {
+    const amount = t.thrust / full;
+    model.glows[i].emissive.setRGB(amount < 0 ? -amount : 0, amount > 0 ? amount * 0.8 : 0, 0);
+    // no arrow for a thruster that is not pushing
+    const arrow = model.arrows[i];
+    arrow.visible = showForces && chaseCamera && Math.abs(amount) > ARROW_FROM;
+    if (arrow.visible) {
+      arrowWay.copy(t.direction).multiplyScalar(amount < 0 ? -1 : 1);
+      arrow.setDirection(arrowWay);
+      arrow.setLength(0.05 + Math.abs(amount) * FULL_ARROW, 0.06, 0.04);
+      arrow.setColor(amount < 0 ? 0xff5050 : 0x55ff88);
+    }
+  });
+  const heading = vehicle.angles().heading;
   for (const crab of crabs) {
     crab.mesh.position.copy(crab.position);
-    if (crab.state === "held") crab.mesh.rotation.set(0, rov.heading, 0);
+    if (crab.state === "held") crab.mesh.rotation.set(0, heading, 0);
   }
 }
 
@@ -690,9 +832,12 @@ function applyResolution() {
 }
 addEventListener("resize", applyResolution);
 addEventListener("keydown", (e) => {
-  if (e.code === "KeyQ" && !e.repeat) {
+  if (e.repeat) return;
+  if (e.code === "KeyQ") {
     resolutionIndex = (resolutionIndex + 1) % RESOLUTIONS.length;
     applyResolution();
+  } else if (e.code === "KeyV") {
+    showForces = !showForces;
   }
 });
 
@@ -704,6 +849,17 @@ const gpu = (() => {
 })();
 
 const flightPanel = document.getElementById("flight");
+const thrusterList = document.getElementById("thruster-list");
+const powerLines = {
+  now: document.getElementById("amps-now"),
+  peak: document.getElementById("amps-peak"),
+  most: document.getElementById("amps-most"),
+};
+
+function showAmps(line, label, amps, unit) {
+  line.textContent = `${label.padEnd(9)} ${amps.toFixed(1).padStart(5)} ${unit}`;
+  line.className = amps > CURRENT_RED ? "over" : amps > CURRENT_YELLOW ? "near" : "";
+}
 const perfPanel = document.getElementById("perf");
 let frames = 0;
 let frameTime = 0;
@@ -719,17 +875,36 @@ function clawText() {
   return crabInReach() ? "open -- crab in reach" : "open";
 }
 
+function bar(amount) {
+  // -1 .. 1 as five cells either side of a centre line
+  const cells = Math.round(Math.min(1, Math.abs(amount)) * 5);
+  const left = amount < 0 ? " ".repeat(5 - cells) + "█".repeat(cells) : " ".repeat(5);
+  const right = amount > 0 ? "█".repeat(cells) + " ".repeat(5 - cells) : " ".repeat(5);
+  return left + "|" + right;
+}
+
 function updatePanels(pad) {
-  const compass = ((-degrees(rov.heading) % 360) + 360) % 360;
+  const angles = vehicle.angles();
+  const compass = ((-degrees(angles.heading) % 360) + 360) % 360;
   flightPanel.textContent =
-    `depth    ${(-rov.position.y).toFixed(1)} m\n` +
+    `rov      ${vehicle.profile.name}\n` +
+    `depth    ${(-vehicle.position.y).toFixed(1)} m\n` +
+    `speed    ${vehicle.velocity.length().toFixed(2)} m/s\n` +
     `heading  ${compass.toFixed(0).padStart(3, "0")}\n` +
-    `pitch    ${degrees(rov.pitch).toFixed(0).padStart(4)}  ${pitchFromTilt ? "tilt" : "level"}\n` +
-    `roll     ${degrees(-rov.roll).toFixed(0).padStart(4)}\n` +
+    `pitch    ${degrees(angles.pitch).toFixed(0).padStart(4)}  ${attitudeFromTilt ? "tilt" : "level"}\n` +
+    `roll     ${degrees(-angles.roll).toFixed(0).padStart(4)}\n` +
     `claw     ${clawText()}\n` +
     `crabs    ${collectedCount()} / ${crabs.length}\n` +
     `time     ${clock.toFixed(1)} s\n` +
     `camera   ${chaseCamera ? "chase" : "onboard"}`;
+  thrusterList.textContent = vehicle.thrusters
+    // + 0 turns a rounded -0 into 0, so a resting thruster never reads "-0 N"
+    .map((t) => `${t.name.padEnd(9)} ${bar(t.command)} ${String(Math.round(t.thrust) + 0).padStart(4)} N`)
+    .join("\n");
+  const volts = vehicle.thrusterModel.volts;
+  showAmps(powerLines.now, "current", vehicle.current(), `A at ${volts} V  (estimate)`);
+  showAmps(powerLines.peak, "peak", peakAmps, "A since Start");
+  showAmps(powerLines.most, "all full", vehicle.mostCurrent(), "A");
   perfPanel.textContent =
     `${fps.toFixed(0)} fps  ${averageMs.toFixed(1)} ms of script\n` +
     `${canvas.width}x${canvas.height}  ${(renderer.info.render.triangles / 1000).toFixed(1)}k tris  ` +
@@ -745,6 +920,12 @@ let owed = 0;
 let panelsShown = 0;
 const started = performance.now();
 
+function padFrom(axes, pressed) {
+  const pad = { axes: [...axes, 0, 0, 0, 0, 0, 0].slice(0, 6), buttons: new Array(16).fill(false) };
+  for (const b of pressed) pad.buttons[b] = true;
+  return pad;
+}
+
 // for poking at the sim from the browser console
 window.sim = {
   rov,
@@ -752,30 +933,45 @@ window.sim = {
   reset,
   clawTip,
   camera,
-  jaws,
+  chooseProfile,
+  get vehicle() { return vehicle; },
+  get assist() { return assist; },
+  get jaws() { return model.jaws; },
   setChaseCamera(on) {
     chaseCamera = on;
     placeCamera(1);
   },
+  setAttitudeFromTilt(on) { attitudeFromTilt = on; },
   get collected() { return collectedCount(); },
   get finished() { return finished; },
   get clock() { return clock; },
-  get pitchFromTilt() { return pitchFromTilt; },
+  get attitudeFromTilt() { return attitudeFromTilt; },
   get chaseCamera() { return chaseCamera; },
-  // run the physics on made-up inputs: sim.fly([0, -1, 0, 0, 0, 0], 3, [0])
+  // run the whole sim on made-up inputs: sim.fly([0, -1, 0, 0, 0, 0], 3, [0])
   fly(axes, seconds, pressed = []) {
-    const pad = { axes: [...axes, 0, 0, 0, 0, 0, 0].slice(0, 6), buttons: new Array(16).fill(false) };
-    for (const b of pressed) pad.buttons[b] = true;
+    const pad = padFrom(axes, pressed);
     for (let t = 0; t < seconds; t += PHYSICS_STEP) physics(pad, PHYSICS_STEP);
+  },
+  // skip the pilot assist and drive the thrusters directly, one command each:
+  // sim.thrusters([1, 0, 0, 0, 0, 0, 0, 0], 3) runs only the first one
+  thrusters(commands, seconds) {
+    for (let t = 0; t < seconds; t += PHYSICS_STEP) {
+      vehicle.thrusters.forEach((th, i) => (th.command = commands[i] || 0));
+      moveVehicle(PHYSICS_STEP);
+    }
   },
 };
 
 function frame(now) {
   const work = performance.now();
   const pad = Pad.update();
-  if (Pad.justPressed(9)) reset();
-  if (Pad.justPressed(2)) chaseCamera = !chaseCamera;
-  if (Pad.justPressed(3)) pitchFromTilt = !pitchFromTilt;
+  if (Pad.justPressed(Pad.START)) reset();
+  if (Pad.justPressed(Pad.X)) chaseCamera = !chaseCamera;
+  if (Pad.justPressed(Pad.Y)) attitudeFromTilt = !attitudeFromTilt;
+  if (Pad.justPressed(Pad.B)) {
+    // the next ROV design (the keyboard's B key is the same button)
+    chooseProfile(PROFILE_NAMES[(PROFILE_NAMES.indexOf(profileName) + 1) % PROFILE_NAMES.length]);
+  }
 
   owed = Math.min(owed + (now - last) / 1000, 0.25);
   last = now;
@@ -806,7 +1002,14 @@ function frame(now) {
 }
 
 applyResolution();
-reset();
+{
+  const asked = new URLSearchParams(location.search).get("profile");
+  let saved = null;
+  try {
+    saved = localStorage.getItem("rov-sim-profile");
+  } catch {}
+  chooseProfile(asked || saved || "cube");
+}
 requestAnimationFrame(frame);
 </script>
 </body>

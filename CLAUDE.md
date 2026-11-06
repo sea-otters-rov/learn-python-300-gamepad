@@ -188,9 +188,9 @@ the stick on A0/A1, and reads the accelerometer as `ay, ax, az` -- the
 physical board is mounted differently from the first layout. `level_x/y` are
 measured the same swapped way round; keep the two in step or tilt drifts.
 
-In the ROV sim, **X switches camera and Y switches pitch between following tilt
-and holding level by itself** (roll always follows tilt). Start is still not
-sent: routing a stick click to it is a one-line student exercise. The keyboard
+In the ROV sim, **X switches camera and Y switches pitch AND roll between
+following tilt and holding level by itself**. Start is still not sent: routing
+a stick click to it is a one-line student exercise. The keyboard
 stands in for everything (see `pad.js`; X and Y keys are the X and Y buttons),
 and **a held key overrides a connected gamepad** -- otherwise a teacher
 demonstrating with a board plugged in finds the keyboard dead.
@@ -201,16 +201,133 @@ demonstrating with a board plugged in finds the keyboard dead.
 - **three.js comes from jsDelivr, pinned to 0.160.0**, via an import map. It
   needs internet; vendoring it into `games/lib` is the fix if classrooms are
   ever offline. It has not been downloaded -- ask before doing so.
-- **The rov sim's numbers on an RTX 2070:** 1.3k triangles, 32 draw calls,
-  ~0.9 ms of script per frame. Not yet measured on a school laptop, which is
-  the number that matters -- press Q in the sim to step the drawing resolution.
+- **The rov sim's numbers on an RTX 2070:** 1.3-1.9k triangles, 45-64 draw
+  calls, and the physics costs 2.5-3.4 us per 240 Hz step (~0.014 ms per
+  frame). Not yet measured on a school laptop, which is the number that
+  matters -- press Q in the sim to step the drawing resolution.
 - **`window.sim` in rov_sim.html is for testing**: `sim.fly(axes, seconds,
-  buttons)` steps the physics directly. Use it rather than synthetic key events
-  -- a hidden browser pane throttles requestAnimationFrame, so time-based tests
-  through the real loop under-run.
+  buttons)` runs the whole sim on made-up inputs, and `sim.thrusters([...],
+  seconds)` drives the thrusters directly, skipping the pilot assist. Use them
+  rather than synthetic key events: a hidden browser pane throttles
+  requestAnimationFrame -- or stops it outright -- so time-based tests through
+  the real loop under-run, and the fps readout freezes.
 - **marble_maze.html** checks nothing at load, but every level must be solvable:
   a hole filling a one-tile corridor is an invisible wall. Level 3 shipped with
   exactly that bug, caught by a BFS from S to G.
+
+### The ROV sim's physics (since 2026-10-25)
+
+Three files, so each can change alone:
+
+- **`games/rov_profiles.js`** -- each ROV as numbers: mass, centers of mass and
+  buoyancy, inertia, added mass, drag, and every thruster's position and
+  direction. **Every number is a guess until the ROV is built**, and each says
+  where it came from. Two profiles: `cube` (8 thrusters, each along one axis;
+  20 cm between centers of buoyancy and mass, so very stable) and `triangle`
+  (3 vertical in the corners + 3 along the bottom edges; 5 cm, so tippy).
+  Both use the club's **APISQUEEN U3** thrusters at `VOLTS = 13` (they run
+  12-14 V). The product page gives only "3Kg" max, 12-24 V, 12 A, 290 W,
+  173 g -- so 3 kg is taken as forward at 24 V, scaled by volts^1.5 (between
+  ideal volts^2 and the T200's measured ~volts^1.3), with reverse at 70%:
+  **11.7 N forward, 8.2 N reverse at 13 V**, a third of a T200. Measuring one
+  thruster on a luggage scale replaces the most important guess in the file.
+- **`games/rov_physics.js`** -- `Vehicle` is a 6-DOF rigid body that only
+  knows forces: thrusters, weight at the center of mass, buoyancy at the center
+  of buoyancy, per-axis drag and added mass, thruster spin-up lag, impulse
+  contacts at hull points. `PilotAssist` is the "flight computer": a
+  pseudo-inverse mixer (thrust allocation) from six wanted pushes to N
+  thrusters, a PD stabilizer for pitch/roll with the float's torque cancelled
+  as feed-forward, a yaw-RATE controller, and "staying upright beats moving"
+  when thrusters saturate. Later, the student's Python is meant to replace
+  `PilotAssist` (board in the loop), so keep the two separate.
+- **`rov_sim.html`** builds the 3D model from the profile. P switches profile
+  (also `?profile=triangle`), V shows forces (thrust arrows, weight and lift),
+  and a panel shows each thruster's command and newtons.
+
+Verified 2026-10-25 with the U3 at 13 V, both profiles, through `sim.fly` /
+`sim.thrusters` (the hand calculation is T * lever = B * (CoB - CoM) * sin tilt):
+
+                                     cube                 triangle
+    one corner thruster, no assist   8.0 deg (hand 8.1)   47.2 deg (hand 47.2)
+    full forward / sideways          0.59 m/s             0.70 / 0.64 m/s
+    full rise                        0.85 m/s             0.69 m/s
+    turn                             60 deg/s             60 deg/s
+    full tilt, nose down             16 deg -- the most   -35 deg, as asked
+                                     it can hold
+    level + full tilt + forward      0.0 deg              within 0.8 deg
+    hands off 20 s                   still, level         still, level
+    crab mission, all 5              completes            completes
+
+**The cube cannot hold more than ~16 deg of tilt with these thrusters.** Its
+float's righting torque (up to 23.5 N m, 20 cm lever) beats four 11.7 N
+verticals. With T200s it reached the full 35. The triangle's 5 cm lever lets
+it tilt fully -- and with T200s one corner thruster FLIPPED it (8.8 N m against
+3.9), where a U3 leaves it at 47 deg. Stability and agility trade off, and the
+thruster decides where the line falls.
+
+**Three bugs found on the way, all worth knowing for any thruster code:**
+
+1. The assist must work in NEWTONS and convert to a command last, stepping over
+   the dead band and asking harder in reverse. Mixing straight to commands lost
+   every small correction inside the 5% dead band (tilt barely moved) and made
+   any move needing a thruster in reverse lopsided (the triangle spun at
+   59 deg/s trying to go forward).
+2. **Thruster spin-up lag acts as extra damping**: the stabilizer at speed 2 /
+   damping 1 took 5.3 s to tilt, so it is tuned to 4 / 0.7 -- under-damped on
+   paper, critically damped in practice.
+3. **When the stabilizer asks for more than the thrusters have, scale it down
+   as a whole; never clip thrusters one by one.** Clipping kept 11.7 N on the
+   pushing-up side and 8.2 N on the pushing-down side, and the difference
+   lifted the cube 1.4 m in 6 s at full tilt with nobody asking.
+
+**Current draw is estimated too** (`Vehicle.current()`, shown under the
+thruster panel with the peak since Start and the all-thrusters-full total).
+Model: the page's 290 W / 12 A taken as full power at 24 V; power ~ thrust^1.5
+(thrust ~ rpm^2, power ~ rpm^3), so with thrust ~ volts^1.5 full power goes as
+volts^2.25 -- **5.6 A per thruster flat out at 13 V**, part power as (fraction
+of full thrust)^1.5, the same in reverse. Plus `IDLE_CURRENT` 0.5 A for
+everything with the thrusters stopped (the club's figure: two 4-in-1 ESCs and
+an RP2350 idle very low) and `CLAW_HOLD_CURRENT` 1 A while the claw grips a
+crab. Checked: one thruster at half thrust matched the hand calculation
+exactly.
+
+                                cube      triangle
+    hands off                   0.5 A     0.5 A
+    holding a crab, level       1.6 A     1.7 A
+    full forward                11.7 A    9.7 A
+    holding full tilt           18.3 A    5.6 A
+    every thruster full + claw  46.4 A    35.2 A
+
+**MATE requires a 15 A fuse**, so the readout turns yellow over 15 A and red
+over 18 A (`CURRENT_YELLOW`, `CURRENT_RED` in rov_sim.html). Both designs can
+draw two to three times that; nothing in the pilot assist limits current yet.
+The cube burns 18.3 A just HOLDING its 16 deg tilt -- fighting its own float
+the whole time -- where the triangle needs 5.6 A for 35 deg. Stability costs
+current as well as agility.
+
+**A held crab (0.5 N wet weight on the claw) dips the nose, and the
+stabilizer's integral term levels it again**: cube 0.9 deg, level in 1.9 s
+(its float alone would hold it at 0.6 deg); triangle 4.0 deg, level in 2.3 s,
+held with 0.66 N up at the nose and 0.33 N down at each rear corner. Without
+the integral term the triangle sat at 5.3 deg -- WORSE than its float's 3.6
+unaided, because the stabilizer's spring is softer than the float's. The
+integral only accumulates within `integralWithin` (5 deg) of a still target:
+learning during a big deliberate tilt overshot the triangle to 44 deg on the
+way to 35.
+
+**A thermostat-style "hold band" was tried and removed** (rest the thrusters
+within 2 deg, kick on past it, to save current and make occasional kicks
+visible). On the triangle it never rested: the springy float bounced it back
+out of the band in a fraction of a second, and across 24 tunings the
+stabilizer was still on 72-87% of the time with +-4 deg of wobble. Pulsing
+suits a slow, heavily damped vehicle; this one is neither.
+
+**Browsers cache the sim's modules.** A plain reload re-fetches
+`rov_sim.html` but can keep a stale `rov_physics.js` or `rov_profiles.js` --
+`python -m http.server` sends no cache rules, so Chrome guesses. One test run
+here measured old code that way. After editing a module, hard-reload
+(Ctrl+Shift+R), or check `sim.assist.fly.toString()` contains the change.
+GitHub Pages caches for 10 minutes, so a just-pushed fix can look unfixed.
 
 ## Invariants
 

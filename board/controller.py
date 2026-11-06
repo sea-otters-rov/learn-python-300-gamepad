@@ -40,10 +40,15 @@ right, left = sticks.connect(i2c)
 
 buttons = []
 for name, pin in (
-    (gamepad.A, board.D9),
-    (gamepad.B, board.D10),
-    (gamepad.X, board.D0),
-    (gamepad.Y, board.D1),
+    (gamepad.A, board.D7),
+    (gamepad.B, board.D8),
+    (gamepad.X, board.D9),
+    (gamepad.Y, board.D10),
+    (gamepad.LB, board.D0),
+    (gamepad.RB, board.D1),
+    (gamepad.LT, board.D2),
+    (gamepad.RT, board.D3),
+    (gamepad.START, board.D6),
 ):
     switch = digitalio.DigitalInOut(pin)
     switch.switch_to_input(pull=digitalio.Pull.UP)  # pressed reads False
@@ -81,10 +86,10 @@ tap_until = 0
 next_report = time.monotonic()
 loops = 0
 while True:
-    pad.left_x = left.x
-    pad.left_y = left.y
-    pad.right_x = -right.x
-    pad.right_y = -right.y
+    pad.left_x = -left.x
+    pad.left_y = -left.y
+    pad.right_x = right.x
+    pad.right_y = right.y
 
     ay, ax, az = sensors.acceleration
     pad.tilt_x = tilt_amount(ax - level_x) * tilt_flip[0]
@@ -95,13 +100,8 @@ while True:
 
     for name, switch in buttons:
         pad.set_button(name, not switch.value)
-    pad.set_button(gamepad.LEFT_CLICK, left.pressed)
-    pad.set_button(gamepad.RIGHT_CLICK, right.pressed)
 
     now = time.monotonic()
-    # if abs(math.sqrt(ax * ax + ay * ay + az * az) - 9.8) > tap_jolt:
-    #     tap_until = now + tap_hold
-    # pad.set_button(gamepad.A, now < tap_until)
 
     pad.send()
     loops += 1
