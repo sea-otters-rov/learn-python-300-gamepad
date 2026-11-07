@@ -1,4 +1,5 @@
-"""Wire the tilt sensor and roll the marble through the maze.
+"""Wire the tilt sensor and roll the marble through the maze:
+http://localhost:8770/games/marble_maze.html
 
 The SEN0140 is a sensor board that feels gravity. Wire it with four wires --
 3V3, GND, SDA to D4, SCL to D5 -- lay your board flat, save, and open the
@@ -43,13 +44,12 @@ level_x = total_x / level_readings
 level_y = total_y / level_readings
 print(f"level x {level_x:.2f}  y {level_y:.2f} m/s^2")
 
-check_every = 0.02  # seconds
-
 while True:
-    pin_value = button.value
-    pad.set_button(gamepad.A, not pin_value)
+    pressed = not button.value
+    pad.set_button(gamepad.A, pressed)
 
     sensor_x, sensor_y, sensor_z = sensors.acceleration
+    # Flip x and y again
     board_x = sensor_y  # turned, as above
     board_y = sensor_x
 
@@ -67,15 +67,15 @@ while True:
     pad.send()
 
     print(f"tip {tip_x:+.2f} {tip_y:+.2f}  stick {pad.left_x:+.2f} {pad.left_y:+.2f}")
-    time.sleep(check_every)
+    time.sleep(0.02)
 
 
 # Try these:
 #   - Change tip_x = board_x - level_x to tip_x = board_x, and the same for y.
 #     Lay the board flat on the desk. What does the marble do now, and why?
-#   - Make full_tilt 2. What changes in the maze? What about 20?
+#   - Make full_tilt 2. What changes in the maze? What about 10?
 #   - Change board_x = sensor_y to board_x = sensor_x. Tip the right edge down.
 #     Which way does the marble go?
 #   - Hold the board as still as you can. Do the tip numbers sit still? What
 #     could you do so tiny wobbles send exactly 0?
-#   - Set full_tilt = 0. Read the error: which line is it pointing at, and why?
+#   - Make your own maze! Edit games/marble_maze.html (line 90ish), then refresh.

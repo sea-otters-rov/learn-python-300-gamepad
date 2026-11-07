@@ -1,6 +1,6 @@
 """Find the attached Part 3 board: its CIRCUITPY drive, and its serial port.
 
-A board is recognised by the boot_out.txt CircuitPython writes to its own drive,
+A board is recognized by the boot_out.txt CircuitPython writes to its own drive,
 and ONLY if that file names a board in SUPPORTED. Any other CircuitPython board
 is ignored on purpose. A MatrixPortal from Parts 1-2 can be plugged into the
 same laptop, and a save or a clean sync landing on it would wipe its lessons --

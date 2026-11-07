@@ -30,6 +30,8 @@ class Pad:
         self.y = False
         self.left_bumper = False
         self.right_bumper = False
+        # Not wired by default -- the lessons use only the six above. Wire
+        # them (pin picture: LT D2, RT D3, Start D6) and these work too.
         self.left_trigger = False
         self.right_trigger = False
         self.start = False

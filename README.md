@@ -73,7 +73,7 @@ extensions and a `.venv` with autocomplete for the board. Then:
   - **Games: play in the browser** -- serve the games locally at
     http://localhost:8770/games/. The ROV sim runs your sim lesson from here
     (not from the published site), and picks up each save straight away
-  - **Lesson: switch lesson** -- pick which lesson runs, on the board or in
+  - **Lessons: choose one** (or **Ctrl+Shift+B**) -- pick which lesson runs, on the board or in
     the sim
 
 If saves stop doing anything, you probably used the REPL: run **Board: verify**

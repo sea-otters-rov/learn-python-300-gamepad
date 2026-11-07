@@ -15,12 +15,16 @@
       "presentation": { "reveal": "always", "panel": "dedicated" }
     },
     {
-      "label": "Lesson: switch lesson",
+      "label": "Lessons: choose one",
       "detail": "Show every lesson, board and sim, and switch to the one you pick.",
       "type": "process",
       "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
       "args": ["${workspaceFolder}\\tools\\lesson.py"],
       "problemMatcher": [],
+      // Default build task, so Ctrl+Shift+B opens the picker directly, as in
+      // Parts 1-2. It is the only task keystroke that can ship in the repo --
+      // VS Code keybindings are user-level and cannot be committed.
+      "group": { "kind": "build", "isDefault": true },
       "presentation": { "reveal": "always", "panel": "dedicated", "focus": true }
     },
     {

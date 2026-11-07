@@ -1,8 +1,8 @@
 """Make your button press A on the Controller check page.
 
 Your board is now a USB gamepad, like a game controller. Open the Controller
-check page, press your button once so the page notices the board, and watch
-"0 A" light up every time you press.
+check page, http://localhost:8770/games/pad_test.html, press your button,
+and watch "0 A" light up every time you press.
 """
 
 import time
@@ -23,11 +23,8 @@ light.switch_to_output()
 # to it when you call pad.send().
 pad = gamepad.Gamepad()
 
-check_every = 0.05  # seconds between looks at the button
-
 while True:
-    pin_value = button.value
-    pressed = not pin_value
+    pressed = not button.value  # Remember we need to invert it
 
     light.value = not pressed  # the USR light is wired backwards: False is on
 
@@ -37,13 +34,10 @@ while True:
     pad.send()
 
     print(f"pressed {pressed}  buttons {pad.buttons:016b}")
-    time.sleep(check_every)
+    time.sleep(0.05)
 
 
 # Try these:
 #   - Change gamepad.A to gamepad.B. Which button lights on the page now, and
 #     what number is next to it? Which digit changes in the console's buttons?
-#   - Put a # in front of pad.send(). What does the page show when you press?
-#   - Set check_every to 0.5 and tap the button as quickly as you can. Does the
-#     page catch every tap?
 #   - Change gamepad.A to gamepad.a. Read the error: what is it looking for?

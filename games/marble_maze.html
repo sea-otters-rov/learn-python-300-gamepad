@@ -82,7 +82,7 @@ const BALL_RADIUS = 5;
 const FULL_STICK_ACCEL = 420; // px/s^2 when the stick is all the way over
 const ROLLING_DRAG = 0.6; // fraction of speed lost per second
 const BOUNCE = 0.35; // fraction of speed kept off a wall
-const HOLE_PULL_RADIUS = 7; // centre this close to a hole's centre: it falls
+const HOLE_PULL_RADIUS = 7; // center this close to a hole's center: it falls
 const GOAL_RADIUS = 7;
 const STEP = 1 / 120; // physics step in seconds
 const TOP_SPEED = 480; // px/s; 4 px a step, under the 5 px radius, so the
@@ -96,25 +96,11 @@ const LEVELS = [
       "################",
       "#S.....#.......#",
       "#......#.......#",
-      "#..##..#..###..#",
+      "#..#####..###..#",
       "#..#......#....#",
       "#..#..#####..###",
-      "#..#.........#G#",
-      "#....#.........#",
-      "################",
-    ],
-  },
-  {
-    title: "Mind the holes",
-    map: [
-      "################",
-      "#S...O.........#",
-      "#....O..O...O..#",
-      "#.......O......#",
-      "####.####..O####",
-      "#........O.....#",
-      "#..O.......O...#",
-      "#.....O......OG#",
+      "#..#.....#...#G#",
+      "#........#.....#",
       "################",
     ],
   },
@@ -122,13 +108,13 @@ const LEVELS = [
     title: "Narrow channels",
     map: [
       "################",
-      "#S#....O.....#.#",
-      "#.#.##...###.#.#",
+      "#S#....O#......#",
+      "#.#.##...#.###.#",
       "#.#..#O#.#...#.#",
       "#.##.#.#.#.###.#",
-      "#....#.#...#...#",
-      "####.#.#####.#.#",
-      "#O...........#G#",
+      "#..#.#.#...#...#",
+      "##.#.#.#####.#O#",
+      "#O...#........G#",
       "################",
     ],
   },
@@ -137,12 +123,26 @@ const LEVELS = [
     map: [
       "################",
       "#S.O.....O.....#",
-      "#.####.#####.#.#",
-      "#.#..O.#...#.#.#",
-      "#.#.####.#.#.#O#",
-      "#...#..O.#...#.#",
-      "###.#.####O###.#",
-      "#G..O..........#",
+      "#.####.#.###.#.#",
+      "#.#....#...#.#.#",
+      "#.#.#O##.#.#.#.#",
+      "#.O.O.GO.#...#.#",
+      "#.O.#.####O##O.#",
+      "#...O..........#",
+      "################",
+    ],
+  },
+  {
+    title: "Mind the holes",
+    map: [
+      "################",
+      "#S............O#",
+      "#OOOOOOOOOOOO.O#",
+      "#G..........#.O#",
+      "#OOOOOOOOOO.#.O#",
+      "#...........#.O#",
+      "#.OOOOOOOOOOO.O#",
+      "#.............O#",
       "################",
     ],
   },
@@ -204,7 +204,7 @@ function saveBest(index, seconds) {
   return false;
 }
 
-function centre(column, row) {
+function center(column, row) {
   return { x: column * TILE + TILE / 2, y: row * TILE + TILE / 2 };
 }
 
@@ -214,9 +214,9 @@ function parse(map) {
     if (line.length !== COLUMNS) throw new Error(`row ${row} is ${line.length} wide`);
     [...line].forEach((cell, column) => {
       if (cell === "#") parsed.walls.add(row * COLUMNS + column);
-      if (cell === "O") parsed.holes.push(centre(column, row));
-      if (cell === "S") parsed.start = centre(column, row);
-      if (cell === "G") parsed.goal = centre(column, row);
+      if (cell === "O") parsed.holes.push(center(column, row));
+      if (cell === "S") parsed.start = center(column, row);
+      if (cell === "G") parsed.goal = center(column, row);
     });
   });
   return parsed;
@@ -284,7 +284,7 @@ function collideWithWalls() {
   for (let row = top; row <= bottom; row++) {
     for (let column = left; column <= right; column++) {
       if (!isWall(column, row)) continue;
-      // nearest point of this wall tile to the marble's centre
+      // nearest point of this wall tile to the marble's center
       const nearX = Math.max(column * TILE, Math.min(ball.x, column * TILE + TILE));
       const nearY = Math.max(row * TILE, Math.min(ball.y, row * TILE + TILE));
       const dx = ball.x - nearX;

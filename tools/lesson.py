@@ -19,7 +19,7 @@ board lesson, which is the controller the sim is flown with.
 
 The list is built by scanning both folders for lesson folders holding a
 main.py, and the synopsis is the first line of that file's docstring. There is
-no catalogue file to keep in step -- add a lesson folder and it appears here.
+no catalog file to keep in step -- add a lesson folder and it appears here.
 """
 
 import os
@@ -175,10 +175,10 @@ def main():
     try:
         choice = input("\nNumber to switch to (Enter to cancel): ").strip()
     except (EOFError, KeyboardInterrupt):
-        print("\n[lesson] cancelled")
+        print("\n[lesson] canceled")
         return 0
     if not choice:
-        print("[lesson] cancelled")
+        print("[lesson] canceled")
         return 0
     chosen = pick(found, choice)
     if chosen is None:

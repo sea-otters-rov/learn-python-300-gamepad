@@ -25,7 +25,7 @@ orientation for working *on* the project.
                 server, live reload), lesson (switch board or sim lesson)
 
 No lessons are written yet, but **the sequence is agreed: `docs/lesson-plan-notes.md`**
-holds it (L301-L312), with the concept table, every decision and why, the
+holds it (L301-L311), with the concept table, every decision and why, the
 `pilot()` API, and what the sim needs before the sim lessons. Read it before
 writing a lesson. In short: four board lessons make the gamepad, then students
 write the ROV's input-to-thruster mapping in Python **that runs inside the
@@ -45,7 +45,10 @@ surface students use; `lib/` is for third-party code):
 - **`sticks.py`** -- `left, right = sticks.connect(i2c)`; each `Stick` reads
   `.x`, `.y` as -1.0 .. 1.0 (y up is -1, like the browser). The stick on A0/A1
   comes first. Measures each center at connect(), default `dead_zone` 0.06,
-  `flip_x/y` (-1 for a stick mounted the other way round). It
+  `edge` 0.04 (a stick pushed toward 3.3 V stops ~1.6% short of 2 x center,
+  so without it that side topped out at 0.96 while the 0 V side hit 1.0),
+  `flip_x/y` (-1 for a stick mounted the other way round). connect() retries
+  the ADS1115 for 0.5 s and, failing, scans the bus and names the wire to check. It
   is the only code that knows about volts. Each `.x`/`.y` is a fresh ADS1115
   conversion (~2 ms), so read once per loop.
 
@@ -115,7 +118,9 @@ the Serial Monitor panel) and retry -- do not route around it.
   D11-D18 are pads on the underside, not breadboard pins. **Every breadboard
   pin is in use, final as of 2026-11-06** (and in the pin picture students
   get): D0 LB, D1 RB, D2 LT, D3 RT, D4/D5 I2C, D6 Start, D7 A, D8 B, D9 X,
-  D10 Y. No stick clicks.
+  D10 Y. No stick clicks. **But the lessons assume only LB, RB, A, B, X, Y**
+  (user, 2026-11-07): LT/RT are not wired by default, an extra a student can
+  add. The sim lessons heave on the bumpers and work the claw with A.
 
 - **Wire buttons to GND with the internal pull-up** (`Pull.UP`, pressed reads
   `False`). RP2350 erratum E9: with the internal pull-DOWN on, a pin driven high
@@ -219,8 +224,9 @@ points at the breakouts' GND; a wiring fix brought all five chips back.
 
 In the ROV sim's built-in pilot, **B switches ROV, X switches camera, Y
 switches pitch AND roll between following tilt and holding level by itself,
-LB/RB close/open the claw, Start resets**. In pilot mode (planned) students
-choose their own buttons for all of it, camera included. The keyboard
+LB/RB close/open the claw, Start resets**. In pilot mode the student's
+Python owns every button; the lessons start them with the bumpers heaving, A
+on the claw (307 on) and B on the camera (308 on). The keyboard
 stands in for everything (see `pad.js`; X and Y keys are the X and Y buttons),
 and **a held key overrides a connected gamepad** -- otherwise a teacher
 demonstrating with a board plugged in finds the keyboard dead.
@@ -254,20 +260,33 @@ mode -- see below):
   buoyancy, inertia, added mass, drag, and every thruster's position and
   direction. **Every number is a guess until the ROV is built**, and each says
   where it came from. Two profiles: `cube` (8 thrusters, each along one axis;
-  6 cm between centers of buoyancy and mass since 2026-11-06, was 20) and
-  `triangle` (3 vertical in the corners + 3 along the bottom edges; 5 cm).
+  10 cm between centers of buoyancy and mass and pitch/roll damping 3, both
+  since 2026-11-06 -- was 20 cm and 0.5) and `triangle` (3 vertical in the
+  corners + 3 along the bottom edges; 5 cm, damping 0.3 -- the tippy one).
   Both use the club's **APISQUEEN U3** thrusters at `VOLTS = 13` (they run
-  12-14 V). The product page gives only "3Kg" max, 12-24 V, 12 A, 290 W,
-  173 g -- so 3 kg is taken as forward at 24 V, scaled by volts^1.5 (between
-  ideal volts^2 and the T200's measured ~volts^1.3), with reverse at 70%:
-  **11.7 N forward, 8.2 N reverse at 13 V**, a third of a T200. Measuring one
-  thruster on a luggage scale replaces the most important guess in the file.
+  12-14 V), from **the maker's thrust table** (`U3_TABLE`, 12-26 V, full
+  throttle, forward and reverse; from the club 2026-11-07), interpolated:
+  **10.3 N each way and 3.25 A at 13 V** -- reverse equals forward up to
+  16 V. Until then the file guessed from the product page alone ("3Kg",
+  12 A, 290 W) and got 11.7 N forward, 70% of that in reverse, 5.6 A. Part
+  throttle is still a guess (current ~ thrust fraction^1.5); a luggage scale
+  and clamp meter at half throttle would replace it. The table is bollard
+  pull (held still): **moving, thrust and current fall in a straight line
+  with the water speed into each propeller, to none at `ZERO_THRUST_SPEED`
+  (4 m/s, a GUESS -- pitch x rev/s, unpublished) and `ZERO_CURRENT_SPEED`
+  (1.2x)** -- since 2026-11-07, at the user's report that real thrusters draw
+  most from a standstill. ~13% less thrust, ~10% less current at the cube's
+  top speed. The pool test that pins it: supply current tied to the wall vs
+  at full speed, timed on the same run as the drag.
 - **`games/rov_physics.js`** -- `Vehicle` is a 6-DOF rigid body that only
   knows forces: thrusters, weight at the center of mass, buoyancy at the center
   of buoyancy, per-axis drag and added mass, thruster spin-up lag, impulse
-  contacts at hull points. `PilotAssist` is the "flight computer": a
+  contacts at hull points. Each thruster's `inflow` (water speed into its
+  propeller: the ROV's speed plus its turning, at the thruster, along the way
+  it pushes) unloads it -- `unloading()`, `thrustLimits()`. `PilotAssist` is
+  the "flight computer": a
   pseudo-inverse mixer (thrust allocation) from six wanted pushes to N
-  thrusters, a PD stabilizer for pitch/roll with the float's torque cancelled
+  thrusters, a PD stabilizer for pitch/roll with the float's torque canceled
   as feed-forward, a yaw-RATE controller, and "staying upright beats moving"
   when thrusters saturate. In pilot mode the student's Python replaces
   `PilotAssist`, so keep the two separate.
@@ -301,24 +320,46 @@ mode -- see below):
   Float64Array); the harness must record which of cube/triangle the lesson
   imported BEFORE checking names, since the check imports both.
 
-Verified 2026-10-25 with the U3 at 13 V, both profiles, through `sim.fly` /
-`sim.thrusters` (the hand calculation is T * lever = B * (CoB - CoM) * sin
-tilt). **Cube rows marked * re-measured 2026-11-06 with the 6 cm float and the
-new integral rule**; the others are from before and should not have changed
-(drag, thrust and mixing did not), except the mission, not re-run:
+Re-measured 2026-11-07 with the maker's thruster table (10.3 N both ways at
+13 V), the inflow loss (`ZERO_THRUST_SPEED` 4 m/s), the 10 cm cube float,
+damping 3 and the integral rule, both profiles, through `sim.fly` /
+`sim.thrusters` (the hand calculation, T * lever = B * (CoB - CoM) * sin
+tilt, holds only standing still -- a lone corner thruster also lifts the ROV,
+and the inflow takes some of its thrust):
 
                                      cube                 triangle
-    one corner thruster, no assist   * 27-29 deg rocking,  47.2 deg (hand 47.2)
-                                     hand 27.9 (was 8.0)
-    full forward / sideways          0.59 m/s             0.70 / 0.64 m/s
-    full rise                        0.85 m/s             0.69 m/s
+    one corner thruster, no assist   13.1 deg, rising     58 deg, rising
+                                     0.36 m/s (hand 14.3  0.2 m/s (hand 68.5
+                                     standing still)      standing still)
+    full forward / sideways          0.51 m/s             0.72 / 0.66 m/s
+    full rise                        0.72 m/s             0.59 m/s
     turn                             60 deg/s             60 deg/s
-    full tilt, nose down             * -35 deg in 1.9 s,  -35 deg in 2.6 s,
-                                     0.2 over (was 16,    0.4 over
-                                     the most it held)
-    level + full tilt + forward      * 0.0 deg            within 1.0 deg
-    hands off 20 s                   * still, level       still, level
-    crab mission, all 5              completes (20 cm)    completes
+    full tilt, nose down             35 deg (35.5 worst)  35 deg (35.4 worst)
+    level + full tilt + forward      0.0 deg              0.0 deg
+    hands off 20 s                   still, level         still, level
+    crab mission, all 5              completed 11-06,     completed 10-25,
+                                     not re-run           not re-run
+
+Equal reverse is why the triangle is FASTER forward than before the table
+(0.70 -> 0.72 m/s, 0.79 before the inflow loss) on less forward thrust:
+going forward runs one edge thruster in reverse, and it no longer holds the
+other back. It also drives straight on the geometric mix (EDGE_LEFT +1,
+EDGE_RIGHT -1), where at 70% it turned 34 deg in 2 s -- but lifts its nose
+5.5 deg and climbs 0.27 m in 5 s, the edge thrusters being below the CoM.
+
+**The pilot assist plans with each thruster's limit NOW (`thrustLimits`),
+not the maker's standstill figure.** Planning with the table, the triangle
+sliding sideways ran its back edge thruster flat out into 0.6 m/s of inflow,
+came up short there, and turned at 7 deg/s with nobody asking (heading 0 to
+45 deg in 7 s); now it turns 0.4 deg in 6 s. Students' own `pilot()` gets no
+such help -- their triangle will yaw when it slides, which is real.
+
+**The standstill current peak barely shows on the cube**: full forward peaks
+at 6.36 A after 0.7 s and settles to 6.31 -- the propellers take ~0.45 s to
+spin up (`spinUp` 0.15 s), by when the ROV is already at 0.31 m/s. What the
+model changes is the current AT speed (7.0 -> 6.3 A). The real start-up spike
+(the motor accelerating its propeller) is not modeled; a fuse rides through
+it.
 
 **The triangle's vertical thrusters sit just OUTSIDE its corners** since
 2026-11-05 (`CORNER_OUT`, 35.4 cm from center, 5 mm clear of the corner
@@ -339,13 +380,23 @@ exactly will flicker**; leave a gap.
 
 **Stability and agility trade off, and the thruster decides where the line
 falls.** With the old 20 cm float the cube could hold only ~16 deg of tilt:
-its float's righting torque (up to 23.5 N m) beat four 11.7 N verticals. With
+its float's righting torque (up to 23.5 N m) beat four verticals. With
 T200s it reached the full 35. The triangle's 5 cm lever lets it tilt fully --
 and with T200s one corner thruster FLIPPED it (8.8 N m against 3.9), where a
-U3 leaves it at 47 deg. **The cube's float moved to 6 cm on 2026-11-06**
-(righting up to 7.1 N m) to match the club's real problem -- last season's
-ROVs pitched 20-30 deg holding a heavy item -- so it now tilts fully and the
-heavy crab pitches it (below).
+U3 leaves it at 47 deg. **The cube's float moved to 10 cm on 2026-11-06**
+(righting up to 11.8 N m) to match the club's real problem -- last season's
+ROVs pitched 20-30 deg holding a heavy item -- so it now tilts the full 35
+deg and the heavy crab pitches it (below). 6 cm was tried first.
+
+**Pitch/roll damping (`turnDrag.linear` x, z) decides whether a student's
+P-only leveler works**, and it is a guess. At 0.5 the cube, tipped 15 deg and
+released, rocked for ~8 s, and lesson 309's leveler at gain 0.3 never settled
+-- at any float height (6, 10, 14 cm all measured): stiffness without damping
+only rings faster. At 3 the cube settles in ~1 s and P-only in ~1.5 s. A PI
+leveler (an integral, for the heavy crab's steady dip) oscillated without a
+damping term at 0.5, and PID settled cleanly -- that is Part 4 (user,
+2026-11-06). **Measure it on the real ROV**: tip it ~15 deg in the pool, let
+go, count the swings.
 
 **Three bugs found on the way, all worth knowing for any thruster code:**
 
@@ -358,49 +409,59 @@ heavy crab pitches it (below).
    damping 1 took 5.3 s to tilt, so it is tuned to 4 / 0.7 -- under-damped on
    paper, critically damped in practice.
 3. **When the stabilizer asks for more than the thrusters have, scale it down
-   as a whole; never clip thrusters one by one.** Clipping kept 11.7 N on the
-   pushing-up side and 8.2 N on the pushing-down side, and the difference
-   lifted the cube 1.4 m in 6 s at full tilt with nobody asking.
+   as a whole; never clip thrusters one by one.** With reverse weaker than
+   forward (the old 70% guess; the real U3 above 16 V), clipping kept 11.7 N
+   on the pushing-up side and 8.2 N on the pushing-down side, and the
+   difference lifted the cube 1.4 m in 6 s at full tilt with nobody asking.
 
 **Current draw is estimated too** (`Vehicle.current()`, shown under the
 thruster panel with the peak since Start and the all-thrusters-full total).
-Model: the page's 290 W / 12 A taken as full power at 24 V; power ~ thrust^1.5
-(thrust ~ rpm^2, power ~ rpm^3), so with thrust ~ volts^1.5 full power goes as
-volts^2.25 -- **5.6 A per thruster flat out at 13 V**, part power as (fraction
-of full thrust)^1.5, the same in reverse. Plus `IDLE_CURRENT` 0.5 A for
+Model: full-throttle current from the maker's table, **3.25 A per thruster
+flat out at 13 V** either way (a guessed 5.6 A before the table) at a
+standstill, less with water flowing in (above); part throttle as (fraction
+of full thrust)^1.5 of that, since thrust ~ rpm^2 and power ~ rpm^3 -- a
+guess, as the table has full throttle only. Plus `IDLE_CURRENT` 0.5 A for
 everything with the thrusters stopped (the club's figure: two 4-in-1 ESCs and
 an RP2350 idle very low) and `CLAW_HOLD_CURRENT` 1 A while the claw grips a
 crab. Checked: one thruster at half thrust matched the hand calculation
 exactly.
 
-                                cube (* 6 cm)   triangle
-    hands off                   * 0.5 A         0.5 A
-    holding a crab, level       * 1.6 A         1.6 A
-    holding the heavy crab      * 8.0 A         6.0 A (still levelling)
-    full forward                11.7 A          9.7 A
-    holding full tilt           * 9.1 A         3.4 A
-    full tilt + full forward    * 19.5 A        16.6 A
-    every thruster full + claw  46.4 A          35.2 A
+                                cube            triangle      (2026-11-07,
+    hands off                   0.5 A           0.5 A          with inflow)
+    holding a crab, level       1.6 A           1.6 A
+    holding the heavy crab      5.2 A           3.1 A (still leveling)
+    full forward, at speed      6.3 A           6.3 A
+    holding full tilt           10.1 A          2.0 A
+    full tilt + full forward    15.9 A          8.0 A
+    every thruster full + claw  27.5 A          21.0 A  (standing still)
+
+Lesson 310's own code (no current limit yet) on the cube: forward + slide
+12.2 A, plus rise 16.0 A, plus full tilt 20.4 A -- so a 15 A limit (TODO 2)
+acts in ordinary flying, and an 18 A one only with everything at once.
 
 **MATE requires a 15 A fuse**, so the readout turns yellow over 15 A and red
 over 18 A (`CURRENT_YELLOW`, `CURRENT_RED` in rov_sim.html). Both designs can
-draw two to three times that; nothing in the pilot assist limits current yet.
-With the old 20 cm float the cube burned 18.3 A just HOLDING its 16 deg tilt
--- fighting its own float the whole time; at 6 cm it holds 35 deg on 9.1 A.
-Stability costs current as well as agility.
+draw well over that; nothing in the pilot assist limits current yet. With
+the old 20 cm float the cube burned 18.3 A (old current model) just HOLDING
+its 16 deg tilt -- fighting its own float the whole time; now it holds 35 deg
+on 10.1 A (standing still, so no inflow loss), where the triangle needs
+2.0 A. Stability costs current as well as
+agility.
 
 **A held crab dips the nose, and the stabilizer's integral term levels it
-again.** Normal crabs (0.5 N wet weight on the claw): cube 1.2 deg, level
-within 0.5 in 1.3 s; triangle 3.9 deg, level in 2.7 s. **One crab is heavy:
+again.** Normal crabs (0.5 N wet weight on the claw): cube 0.8 deg, level
+within 0.5 in 1.6 s; triangle 4.4 deg, level in 2.9 s. **One crab is heavy:
 8 N** (`HEAVY_CRAB_WET_WEIGHT`, drawn bigger and darker), because MATE tasks
 have one and the club's ROVs pitched 20-30 deg with one. With depth held and
-NO leveling -- a student's code before lesson 309 -- it pitches the cube
-22.6 deg, swinging to 27.7 on the grab (hand 22.5; 1.8 deg for a normal
-crab). The built-in pilot's level mode holds it to 14.0 deg at worst and is
-level within 1 deg in 5.2 s. On the triangle the heavy crab's torque at level
-(3.91 N m) equals the MOST its float can ever push back (3.92 N m, at 90
-deg): unassisted it would roll onto its nose; the stabilizer catches it at
-47 deg and levels it slowly (-4 deg after 12 s).
+NO leveling -- a student's code before lesson 309 -- it pitches the cube 15.1
+deg, swinging to 16.3 on the grab; lesson 309's P-only leveler (gain 0.3)
+holds it at ~5 deg. The built-in pilot's level mode holds it to 13.6 deg at
+worst and is level within 1 deg in 5.6 s. On the triangle the heavy crab's
+torque at level (3.91 N m) equals the most its float can push back (3.92, at
+90 deg), but the low claw swings back under the ROV as the nose drops, so
+unassisted it settles at ~41 deg; the built-in stabilizer catches it at 47.5
+and is level within 1 deg in 7.3 s (with the old 70% reverse it crawled: -4
+deg after 12 s).
 
 Without the integral term the triangle sat at 5.3 deg with a normal crab --
 WORSE than its float's 3.6 unaided, because the stabilizer's spring is softer
@@ -409,8 +470,9 @@ and the ROV turning slower than `integralBelowRate` (3 deg/s), capped at
 `integralCap` (60%) of full pitch/roll push. Until 2026-11-06 the rule was
 "within 5 deg of a still target", with a 30% cap: the heavy crab left the
 cube's spring 14.3 deg short, outside 5 deg, so the integral never started
-and the cube sat at 14.3 deg for good -- lesson 310's "dip that stays",
-demonstrated by the sim's own stabilizer. Learning during a big deliberate
+and the cube sat at 14.3 deg for good -- the steady dip any leveler without
+an integral leaves, demonstrated by the sim's own stabilizer (with the 6 cm
+float of the time). Learning during a big deliberate
 tilt is still excluded (the ROV is turning then); that once overshot the
 triangle to 44 deg on the way to 35, and full tilt now overshoots 0.2-0.4.
 
@@ -447,7 +509,10 @@ tried IPv6 first and every request took 310 ms instead of 5.
 - **No UTF-8 BOM in board files.** CircuitPython reports a SyntaxError on line 1
   for one. PowerShell 5.1's `Set-Content -Encoding utf8` writes one -- that bit
   this project once, on `boot.py`. Both sync tools strip it.
-- American spellings; f-strings; ruff format at 88 columns.
+- **US spellings everywhere** -- code, identifiers, comments, docs, games:
+  center, color, meter, leveling, canceled, recognize, catalog. The user
+  caught `centre` in the maze (2026-11-07); a sweep then found and fixed
+  eight more words. f-strings; ruff format at 88 columns.
 
 ## SEN0140 drivers
 

@@ -4,10 +4,10 @@ Internal notes for designing Part 3's lessons. `CLAUDE.md` holds the hardware
 facts and measurements; this file holds the *teaching* decisions.
 
 **Status, 2026-11-06: the sequence below is agreed with the user. The four
-board lessons, 301-304, are written and verified on hardware**, and the sim's
-pilot mode is built and verified (see "What the sim needs"), so the sim
-lessons 305-312 can be written next; `sim/L305_tank_drive` exists only as
-pilot mode's test case. `board/controller.py` is still in `board/` -- 304 is
+board lessons, 301-304, are written and verified on hardware**, the sim's
+pilot mode is built and verified (see "What the sim needs"), and **the sim
+lessons 305-311 plus the worked answer 399 are written and verified in the
+sim**. `board/controller.py` is still in `board/` -- 304 is
 its lesson form -- and the games' contract in `CLAUDE.md` still names it.
 
 The design was settled across two sessions: the one that built the hardware,
@@ -101,22 +101,30 @@ Carried over from Parts 1-2 and **decided** for this repo:
 | 302 | `board/L302_be_a_gamepad` | Make your button press A on the Controller check page. | The board as a USB gamepad (`gamepad.py`, buttons numbered from 0) | "0 A" lights on `pad_test.html` | 20 |
 | 303 | `board/L303_tilt_the_maze` | Wire the tilt sensor and roll the marble through the maze. | I2C: a sensor on four wires; acceleration becomes a stick | Marble rolls through the maze | 35 |
 | 304 | `board/L304_finish_the_controller` | Add both thumbsticks and the rest of the buttons. | A second chip on the same bus (ADS1115 through `sticks.py`) | Every stick and button on the check page; maze by stick | 35 |
-| 305 | `sim/L305_tank_drive` | Drive the cube ROV with tank controls. | Code that runs in the sim: `pilot(pad, rov)`, thruster names | Drives and turns -- backwards at first (the sign trap) | 30 |
+| 305 | `sim/L305_tank_drive` | Drive the cube ROV with tank controls. | Code that runs in the sim: `pilot(pad, rov)`, thruster names | Drives and turns | 30 |
 | 306 | `sim/L306_every_direction` | Add up, down and sideways. | More inputs to more thrusters; a button becomes a named power | Flies in 3D | 30 |
 | 307 | `sim/L307_grab_a_crab` | Work the claw and collect your first crab. | State that lasts between calls; a press, not a hold | First crab in the basket | 30 |
 | 308 | `sim/L308_tilt_to_pitch` | Tilt your controller to pitch and roll the ROV. | Mixing: one thruster serves three inputs, then clamp | Fully controlled cube | 35 |
-| 309 | `sim/L309_level_yourself` | Make the ROV hold itself level with its own accelerometer. | Feedback: measure, compare, correct (P control) | The heavy crab no longer drags the nose down | 35 |
-| 310 | `sim/L310_the_dip_that_stays` | Make the last bit of the dip go away. | Feedback that learns a steady load (I term) | Level, even holding the heavy crab | 30 |
-| 311 | `sim/L311_crab_mission` | Fly the whole mission on your own controls. | *(assembly)* | Capstone: every crab, heavy one included | 60-90 |
-| 312 | `sim/L312_triangle` | Stretch: map the controls to the triangle ROV. | Thrusters at angles | Not expected to be finished | -- |
+| 309 | `sim/L309_level_yourself` | Make the ROV hold itself level with its own accelerometer. | Feedback: measure, compare, correct (P control) | The heavy crab's dip cut from 15 deg to ~5 | 35 |
+| 310 | `sim/L310_crab_mission` | Fly the whole mission on your own controls. | *(assembly, two TODOs)* | Capstone: every crab, heavy one included | 60-90 |
+| 311 | `sim/L311_triangle` | Stretch: map the controls to the triangle ROV. | Thrusters at angles | Not expected to be finished | -- |
+| 399 | `sim/L399_crab_mission_done` | Lesson 310's crab mission with every TODO filled in. | *(worked answer)* | -- | -- |
 
-**Total: ~1h50 on the board (301-304), ~3h10 in the sim (305-310), plus
-60-90 min for the capstone. ~6h15.** The sim is where the time goes, as the
-user wants.
+**Total: ~1h50 on the board (301-304), ~2h40 in the sim (305-309), plus
+60-90 min for the capstone. ~5h45**, the same as Part 1. The sim is where the
+time goes, as the user wants.
 
-**Renumbered 2026-11-06.** A draft had 304 "find level" and 306 "every
-button"; both were dropped (below) and the rest closed up. A worked answer for
-the capstone (Part 1's L199 pattern) is undecided.
+**All of 301-311 and 399 are written and verified** (board lessons on
+hardware, sim lessons through `sim.fly` with the lesson's own `pilot()`).
+
+**Renumbered 2026-11-06, twice.** A draft had 304 "find level" and 306 "every
+button"; both were dropped and the rest closed up. Then the integral lesson
+("the dip that stays") was dropped -- see "PID is Part 4" under Decisions --
+and the capstone and the triangle moved up to 310 and 311.
+
+**`L399_crab_mission_done` shows in the lesson picker**, like Part 1's L199:
+`tools/lesson.py` lists any `L<number>_` folder with a `main.py`. If the
+answers should not be one keystroke away, move it out of `sim/`.
 
 Per lesson:
 
@@ -187,34 +195,90 @@ Per lesson:
   only `pilot.py` differs** (user, 2026-11-06). The buttons loop -- a tuple of
   (button, pin) pairs -- is given code. After 304 the board is never edited
   again in Part 3: it runs 304 throughout the sim lessons.
-- **305** starts from a given example: left stick up/down to the left forward
-  thruster, right stick to the right one, which is how the club's ROVs were
-  driven last season. It cannot go up or down or work the claw. The sign trap
-  comes free: a stick pushed away reads -1, a thruster wants +1 for forward.
-- **306** adds the four verticals together (buttons, so full power or a named
-  fraction) and the two side thrusters.
-- **307** -- the claw is `rov.claw_closed`, which stays set until changed, so
-  hold-to-grip works with no new idea. A one-button toggle needs last call's
-  button state (a module variable and `global`, from Part 1's L108), and is
-  the lesson's real content. The camera (`rov.camera_onboard`) gets the same
-  treatment, on a button the student picks.
-- **308** is the first time a thruster gets more than one input:
-  `up FL = heave + pitch + roll` and so on, which passes 1.0 and needs a clamp.
-  Hand tilt *commands* thrust here, and the cube does not end up at the angle
-  being held -- its float pushes back. That is the setup for 309.
-- **309** closes the loop on `rov.acceleration`, the ROV's own (simulated)
-  accelerometer: for small tilts, x and y are about g times the angle, so
-  `correction = gain * y` is a working leveler with no trig. The hand tilt
-  becomes the *target*. Needs a heavy crab to matter (below).
-- **310** -- a P-only leveler leaves a steady dip under a constant load,
-  because its correction exists only while there is an error. The integral
-  term learns the load. `CLAUDE.md` has the sim's own evidence (the triangle
-  at 5.3 deg without it, worse than its float alone) and the trap that came
-  with it (learning during a big deliberate tilt overshot to 44 deg).
-- **311** -- the mission with the heavy crab. The "they will ask for it"
-  extras below are its make-it-yours list.
-- **312** -- the triangle's horizontal thrusters are 120 deg apart, so mixing
-  needs trig or a given table. The user does not expect students to finish.
+Every sim lesson ships WORKING; the traps are in the try-these (the sign trap
+moved out of 305's code into a question). Each copies the last one forward.
+Measured with the final physics (cube float 10 cm, pitch/roll damping 3).
+**On 2026-11-07 the thrusters changed to the maker's table** (10.3 N both
+ways and 3.25 A at 13 V, was a guessed 11.7 N forward, 8.2 N reverse, 5.6 A).
+The same day, thrust and current started falling with the water speed
+into each propeller (`ZERO_THRUST_SPEED`, a 4 m/s guess). Figures re-measured
+with both are marked (11-07); the rest are from before, and any amps among
+them are now roughly 60% too high:
+
+- **305 -- written and verified.** Left stick to `FORWARD_LEFT`, right to
+  `FORWARD_RIGHT`, with the minus sign explained. Full forward 0.51 m/s at
+  6.3 A (11-07); left stick alone turns right (89 deg in 2 s); **half power is
+  0.35 m/s, not half speed, and 2.5 A, not half the current** (11-07) -- so the try-this
+  asks "is half power half speed?". Without the minus signs it drives
+  backwards 1.2 m in 3 s.
+- **306 -- written and verified.** The bumpers heave (RB up, LB down;
+  `heave_power` 0.5, named -- triggers until 2026-11-07, see "Buttons the
+  lessons assume"), right stick x slides on both side thrusters. Rise reaches
+  the surface in 3 s, dive 0.48 m/s; both bumpers: dive wins (last `if`); let
+  go and it coasts 0.65 m and stops (neutral); `SIDE_FRONT` alone spins it
+  141 deg in 3 s; full-power dive 11.6 A (11-07). (A `heave_power = "half"`
+  try-this, erroring only on a press, was removed by the user 2026-11-07.)
+- **307 -- written and verified.** One-button claw toggle on A (the right
+  bumper until 2026-11-07; verified on A that day):
+  `claw_was_pressed` at module level, `global`, `pressed and not
+  was_pressed`. Normal grab works (1.5 A); without the `and not` the claw
+  flips every call (`CoCoCo...`); **without `global`, the error only comes on
+  the first press** -- `NameError: local variable referenced before
+  assignment`, because `and` stops early while the button is up. The heavy
+  crab pitches the nose ~15 deg and the ROV sinks -- **so far it cannot be
+  dropped in the basket without raising `heave_power`** (user, 2026-11-07).
+  Not designed, but kept on purpose: it gives a reason to change the lift
+  settings, and to want tilt control, right before 308. The heavy-crab
+  try-this points there. Don't "fix" it by lightening the crab or raising
+  the default `heave_power`. Student module state
+  survives R; only a save reloads it. Camera is a try-this, on a button the
+  student picks; **from 308 on the lessons come with B switching the
+  camera** (user, 2026-11-07), the same press-catching code as the claw.
+- **308 -- written and verified.** `pitch = tilt_y * pitch_power`, `roll =
+  tilt_x * roll_power`, four mixed lines, a `clamp()` function. Full forward
+  tilt settles at 19.4 deg and the depth holds (11-07): the front pair's push
+  down cancels the back pair's push up exactly. Until the maker's table, reverse
+  was a guessed 70% and the ROV floated up unasked -- the try-this now asks
+  why it doesn't, and what weaker reverse would do.
+  **`clamp()` hides the red "asked" readout** -- the try-this removes the
+  clamp on one thruster to show `asked 1.50`. With the heavy crab, holding
+  level by hand takes ~80% back tilt.
+- **309 -- written and verified.** P-only leveler on `rov.acceleration`, hand
+  tilt as the target (`max_tip` 5, like 303's `full_tilt`), `level_gain`
+  0.3. Heavy crab, depth held: 15.1 deg unleveled, ~5 deg at 0.3, ~10 at 0.1;
+  at 1.0 it never settles (+-5 deg, up to 19 A). Full tilt reaches ~19 of
+  30.7 deg (P alone stops short). **A reversed error sign flips the ROV over
+  backwards within 4 s** when the controller is tipped forward -- the try-this.
+- **310 -- capstone, written and verified.** 309's pilot rearranged so every
+  power is worked out first and sent at the end, plus two TODOs: depth
+  hold on a button of the student's choice, X or Y (P on `rov.depth`, to a
+  depth they pick), and stay under the fuse (one shared scale on
+  `rov.amps`). The camera toggle was a TODO until 2026-11-07, when B came
+  given from 308 on. **Face the basket** (remember `rov.heading`, turn back
+  the short way) was TODO 1 until the same day: it needs two buttons, and
+  with LB/RB heaving and A on the claw only B, X and Y were left for three
+  jobs. It went to an extra for LT/RT, then the user replaced that extra with
+  **one-stick drive** (drive and turn on the left stick -- arcade mixing).
+  Runs as given; **the whole mission completes in
+  pilot mode** through the lesson's own claw code (all five crabs, the heavy
+  one included, landed in the basket and the sim declared it finished).
+- **399 -- worked answer, verified 2026-11-07.** A claw, B camera, Y holds
+  just under the surface (0.41 m for a 0.4 target; ~0.5 with the heavy
+  crab), current limited at **15 A** (the fuse L310 names; was 18 until
+  11-07, which acted only with every input held -- L310's own code draws
+  16.0 A for forward + slide + rise, 20.4 with full tilt too), and one-stick
+  drive (`one_stick = True`; forward 0.51 m/s straight, full right turns
+  51 deg in 1 s on the spot; False is tank drive). With everything held the
+  limit hovers at 14.9-15.7 A. Its face-the-basket answer was dropped with
+  that extra, before it was ever committed; the "they'll ask" table below
+  has the method (and `turn_gain` 0.01 worked; 0.02 swung +-5 deg).
+- **311 -- stretch, written and verified as a starting point.** Up/down and
+  claw given; driving and leveling are TODOs with the measured push direction
+  of each edge thruster. Forward-only (EDGE_LEFT +1, EDGE_RIGHT -1) drives straight
+  (11-07; at the old 70% reverse it turned 34 deg in 2 s), but **lifts the nose
+  5.5 deg and climbs 0.27 m in 5 s**: the edge thrusters sit below the center
+  of mass. The hint says so. Unleveled, the heavy crab pitches the triangle
+  ~41 deg (not onto its nose: the low claw swings under it as it pitches).
 
 ### Pushback and risks
 
@@ -245,14 +309,15 @@ Per lesson:
 | Thruster names as constants (`cube.FORWARD_LEFT`) | 305 | all sim lessons |
 | Sign conventions (stick away = -1) | 305 | 308 |
 | Type hints -- read, not written (the header is given) | 305 | -- |
-| A button becomes a named power | 306 | 311 |
-| State that lasts between calls; a press vs a hold | 307 | 310, 311 |
-| Mixing: adding inputs per thruster, then clamp | 308 | 309, 311, 312 |
-| Feedback / P control | 309 | 310, 311 |
-| An accumulator over time (I term) | 310 | 311 |
-| Scaling every thruster together (current limit) | 311 extra | -- |
-| Angle wraparound (heading) | 311 extra | -- |
-| Trig: thrusters at angles | 312 | -- |
+| A button becomes a named power | 306 | 310 |
+| State that lasts between calls; a press vs a hold | 307 | 310 |
+| Mixing: adding inputs per thruster, then clamp | 308 | 309, 310, 311 |
+| Feedback / P control | 309 | 310 (depth, heading) |
+| Scaling every thruster together (current limit) | 310 TODO | -- |
+| Angle wraparound (heading) | 310 TODO | -- |
+| Thrusters at angles | 311 | -- |
+
+Not in Part 3: the integral and derivative terms. PID is Part 4.
 
 ## Decisions, 2026-11-05 .. 06
 
@@ -295,13 +360,26 @@ Each was an open question or an undecided idea in the earlier notes.
 - **Self-leveling must be noticeable on the cube** -- the club had exactly
   this problem last season, mostly from low stability and partly from heavier
   items on a long claw arm, pitching about 20-30 deg. Built: the cube's float
-  **6 cm** above its center of mass (was 20), and **one 8 N heavy crab** --
-  22.6 deg unleveled, measured (see "What the sim needs", item 5).
+  **10 cm** above its center of mass (was 20; 6 was tried), and **one 8 N
+  heavy crab** -- 15 deg unleveled on the cube, ~41 on the triangle. The user
+  chose 10 cm over 6 (2026-11-06): less pitch from the crabs, while the
+  triangle stays the tippy, "unstable by default" design.
+- **PID is Part 4** (user, 2026-11-06: "I haven't gone into PIDs with them
+  yet and doing it as part of coding will be difficult"). Part 3 levels with
+  P only. Why it had to be decided: P-only with the sim's original damping
+  guess never settled, and adding the planned integral lesson made it worse;
+  only a full PID settled. Raising the cube's pitch/roll damping guess from
+  0.5 to 3 (`rov_profiles.js`, with a pool test to measure the real one) made
+  P alone settle in ~1.5 s. The dropped lesson was 310 "the dip that stays";
+  no lesson replaced it (a "trim" button lesson was offered and not wanted).
+  "Unless this convinces them to abandon the triangle idea altogether" --
+  the triangle (311) is where the need for more than P shows.
 - **The sim keeps its built-in pilot** (`PilotAssist`) as a demo mode and the
   GitHub Pages fallback; pilot mode is the student's.
-- **Camera switching is the pilot's** (`rov.camera_onboard`), and **students
-  decide which button does it** (user, 2026-11-06) -- the real ROV needs the
-  same. Reset and profile switching move to keyboard keys that are not gamepad
+- **Camera switching is the pilot's** (`rov.camera_onboard`) -- the real ROV
+  needs the same. Students pick its button in 307's try-this; **from 308 on
+  the lessons give it on B** (user, 2026-11-07; was "students decide",
+  2026-11-06). Reset and profile switching move to keyboard keys that are not gamepad
   stand-ins.
 - **Pin map, final** (user, 2026-11-06; matches `controller.py` and the pin
   picture students get):
@@ -311,6 +389,14 @@ Each was an open question or an undecided idea in the earlier notes.
 
   No stick clicks. `CLAUDE.md` matches (2026-11-06); **`README.md`'s wiring
   table still shows the old layout** (A D9, B D10, X D0, Y D1, clicks D7/D8).
+- **Buttons the lessons assume: LB, RB, A, B, X, Y** (user, 2026-11-07). LT
+  and RT (D2, D3) are not wired by default -- an extra a student can add --
+  and no lesson relies on Start either. So the bumpers heave (RB up, LB down,
+  306 on) and A works the claw (307 on), leaving B, X and Y for the student's
+  own buttons; the one two-button idea, face the basket, was dropped (see
+  310).
+  Lesson 304's button list still names LT and RT: an unwired pin with the
+  pull-up just reads "not pressed".
 - **The mounting swaps in `controller.py` are how students will build it
   too** (user, 2026-11-06): the A0/A1 stick is the right one, the left stick is
   turned 180 degrees from it, and the SEN0140's x/y are swapped. They are now
@@ -346,7 +432,7 @@ else on `rov` keeps its value.
 | --- | --- | --- |
 | One button toggles the claw | `rov.claw_closed` (readable) | Easy -- it is 307 |
 | A button to rise to the surface | `rov.depth` | Easy after 309: depth hold is leveling's P control on another reading |
-| A button to face the crab box | `rov.heading` | Medium. The ROV cannot know where the box is: press one button facing it to remember the heading, another to turn back to it. Trap: 350 to 10 deg is +20, not -340 |
+| A button to face the crab box | `rov.heading` | Medium, and two buttons -- not in the lessons (only X and Y are free in 310); for a student who wires LT/RT. The ROV cannot know where the box is: press one button facing it to remember the heading, another to turn back to it. Trap: 350 to 10 deg is +20, not -340 |
 | Stay under 18 A | `rov.amps` | Medium. Scale *every* thruster by one factor; clipping one changes the direction (`CLAUDE.md`, stabilizer bug 3). Nudge the factor down while over, up while under |
 
 Depth hold, heading hold and leveling are one idea on three sensors -- a sign
@@ -369,27 +455,28 @@ the sequence's center (309) is in the right place.
    ROV's file gets a warning, not an error.
 4. **Done -- the accelerometer** (gravity only; no motion switch yet), and
    `depth`, `heading`, `amps`. Its signs follow the controller's tilt.
-5. **Done 2026-11-06 -- profile changes.** Cube float at 6 cm; one **8 N
-   heavy crab** (drawn bigger and darker). The target was the user's **last
-   season: about 20-30 deg** of pitch with a heavy item. With depth held and no
-   leveling the cube settles at 22.6 deg, swinging to 27.7 on the grab;
-   normal crabs dip 1.8. The cost of a dip is what actually happens (the claw
-   camera loses the basket); **no crab slipping for now** (user: "let's
-   wait"). `CLAUDE.md`'s cube numbers are re-measured.
+5. **Done 2026-11-06 -- profile changes.** Cube float at **10 cm** (6 was
+   tried first), cube pitch/roll damping **3** (was 0.5), one **8 N heavy
+   crab** (drawn bigger and darker). The target was the user's **last season:
+   about 20-30 deg** of pitch with a heavy item; the user then chose less
+   pitch on the cube (10 cm), with the triangle the tippy one. With depth
+   held and no leveling the cube settles at 15.1 deg (16.3 on the grab), the
+   triangle ~41. The cost of a dip is what actually happens (the claw camera
+   loses the basket); **no crab slipping for now** (user: "let's wait").
+   `CLAUDE.md`'s cube numbers are re-measured at the final settings.
 
-   **Lesson material from it:** the built-in stabilizer, P plus an integral
-   that only learned within 5 deg, held the heavy crab at **14.3 deg forever**
-   -- the P term halved the dip and the steady error then sat outside the
-   integral's window. That is lesson 310's "dip that stays", shown by the sim
-   itself; a P-only student leveler will do the same. The built-in now learns
-   whenever the ROV has stopped turning, and levels the heavy crab in 5.2 s
-   -- the demo of where 309-310 are headed. On the triangle (stretch lesson)
-   the heavy crab equals its float's whole righting torque: it nearly rolls
-   onto its nose, and levels only slowly even with the built-in pilot.
+   **Found on the way:** the built-in stabilizer, P plus an integral that
+   only learned within 5 deg, held the heavy crab at 14.3 deg forever (6 cm
+   float) -- the P term halved the dip and the steady error sat outside the
+   integral's window. It now learns whenever the ROV has stopped turning, and
+   levels the heavy crab in 5.6 s: the demo of where 309 is headed. And the
+   damping guess decided whether students' P-only leveling works at all --
+   see "PID is Part 4" under Decisions.
 6. **Done -- keys**: R reset, 1 / 2 the ROV, M built-in pilot and back. In
    pilot mode the sim ignores every controller button.
 7. **Done -- `serve.py` watches `sim/`, and `tools/lesson.py`** picks board
-   and sim lessons (VS Code task "Lesson: switch lesson"). A sim switch
+   and sim lessons (VS Code task "Lessons: choose one", the default build
+   task, so Ctrl+Shift+B, as in Parts 1-2). A sim switch
    rewrites `sim/pilot.py` and an open sim reloads into it (verified); a board
    switch rewrites `board/code.py` -- which is still `import controller`, so
    the first switch replaces it with the lesson line -- and pushes it (not yet
@@ -480,8 +567,10 @@ Found on the way:
   which is what the real ROV's IMU does.
 - **Measured physics facts make good lesson material**: stability trades
   against agility and current. With its old 20 cm float the cube could hold
-  only 16 deg of tilt and burned 18.3 A doing it; at 6 cm it holds 35 deg on
-  9.1 A, and a heavy crab pitches it 22 deg. `CLAUDE.md` has the table.
+  only 16 deg of tilt and burned 18.3 A doing it; at 10 cm, with the maker's
+  thruster table, it holds the full 35 deg on 10.1 A (the triangle: 35 deg on
+  2.0 A), and the heavy crab pitches it
+  15 deg. `CLAUDE.md` has the table.
 - The stabilizer tuning stories in `CLAUDE.md` (newtons not commands, lag as
   damping, scale don't clip, integral only near a still target) are the
   answer key for 309-311's hard cases.

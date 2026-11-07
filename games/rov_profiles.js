@@ -5,7 +5,7 @@
 // physics in rov_physics.js uses nothing else: change a profile and the ROV
 // flies differently, with no other code to touch.
 //
-// Units are metres, kilograms, newtons, seconds and radians. Positions are in
+// Units are meters, kilograms, newtons, seconds and radians. Positions are in
 // the ROV's own frame, measured from the CENTER OF ITS SHAPE:
 //
 //     x  right        y  up        z  backwards  (so forward is -z)
@@ -28,47 +28,74 @@ const g = 9.81; // m/s^2
 
 const VOLTS = 13; // the club runs the thrusters at 12-14 V
 
-// APISQUEEN U3, sold as "6S 24V ... 3kg thrust". Its product page gives
-// 3-6S (12-24 V), 12 A, 290 W, "Maximum thrust: 3Kg", 173 g -- and nothing
-// else: no thrust curve, no reverse figure, nothing below 24 V. So:
+// APISQUEEN U3: the maker's "thrust data at different voltages" table (from
+// the club, 2026-11-07), full throttle. Thrust in kg, current in A.
 //
-//   - "3Kg" is taken to be at 24 V, forward.
-//   - Thrust at lower voltage: a propeller's thrust goes as its speed squared
-//     and a motor's speed roughly as its voltage, so ideally thrust ~ volts^2.
-//     Real motors under load fall short of that -- Blue Robotics' measured T200
-//     curve behaves more like volts^1.3. Assumed in between: volts^1.5.
-//     At 13 V that is (13/24)^1.5 * 3 kg = 1.2 kg, about 12 N.
-//   - Reverse: these come as CW and CCW, so the propellers are shaped for one
-//     direction and will push less backwards. Assumed 70%. Reverse at all
-//     needs a bidirectional ESC.
+//   volts   forward kg   A    reverse kg   A
+const U3_TABLE = [
+  [12, 0.9, 3, 0.9, 3],
+  [14, 1.2, 3.5, 1.2, 3.5],
+  [16, 1.5, 4, 1.5, 4],
+  [18, 1.8, 5, 1.6, 5],
+  [20, 2.1, 8, 1.9, 8],
+  [22, 2.4, 9, 2.0, 9],
+  [24, 2.7, 12, 2.4, 11],
+  [26, 3.0, 14, 2.6, 13],
+];
 //
-// THE NUMBER TO MEASURE FIRST: hang one thruster in a bucket from a luggage
-// scale and run it at full, both ways, at the ROV's real voltage. Put the two
-// readings (in kg, times 9.81) into `forward` and `reverse` below and delete
-// the guessing.
+// Reverse pushes as hard as forward up to 16 V, so the club's 12-14 V gets
+// the same thrust both ways. At 13 V, halfway between the 12 and 14 V rows:
+// 1.05 kg = 10.3 N each way, 3.25 A. (Before the table this file guessed from
+// the product page alone -- "3Kg", 12 A, 290 W -- and got 11.7 N forward, 70%
+// of that in reverse, and 5.6 A: too much thrust forward, too little in
+// reverse, and nearly twice the current.)
 //
-// CURRENT, also estimated -- the page's only electrical numbers are "12A" and
-// "290W", taken as full power at 24 V. A propeller's power grows faster than
-// its thrust: power ~ thrust^1.5 (from thrust ~ rpm^2 and power ~ rpm^3). With
-// thrust ~ volts^1.5 above, full power goes as volts^2.25: at 13 V that is
-// 290 W * (13/24)^2.25 = 73 W, so 5.6 A per thruster flat out. Part power
-// draws (fraction of full thrust)^1.5 of that, backwards as well as forwards
-// -- the propeller spins as fast either way; it just pushes less in reverse.
-// To check it: put a clamp meter (or the supply's own meter) on one thruster
-// during the luggage-scale test.
+// Part throttle draws (fraction of full thrust)^1.5 of the full current: a
+// propeller's thrust goes as its speed squared and its power as its speed
+// cubed. That curve is still a guess -- the table only has full throttle.
+//
+// The table is "bollard pull": the thruster held still. Moving, water already
+// flows into the propeller, so each blade bites less -- thrust AND current
+// fall as the ROV speeds up, the most current being drawn from a standstill.
+// Modeled as a straight line (thrustFor, current in rov_physics.js): all of
+// the table at a standstill, none at ZERO_THRUST_SPEED of water flowing in.
+// That speed is the propeller's pitch times its revolutions per second, and
+// the U3's are not published: 4 m/s is a GUESS, typical of small ROV
+// thrusters (3-6 m/s). The torque, and so the current, falls a little slower
+// than the thrust -- reaching zero at about 1.2x the speed, as on published
+// propeller curves. At the cube's top speed (~0.5 m/s) that is ~13% less
+// thrust and ~10% less current than at a standstill.
+const ZERO_THRUST_SPEED = 4.0; // m/s, a guess
+const ZERO_CURRENT_SPEED = 1.2 * ZERO_THRUST_SPEED;
+//
+// STILL WORTH MEASURING: hang one thruster in a bucket from a luggage scale,
+// with a clamp meter on its wire, at the ROV's real voltage, both ways, and
+// at half throttle too. The maker's table is better than a guess but is not
+// this thruster, this ESC, this water. And in the pool, the supply's current
+// with the ROV tied to the wall at full forward, then at full speed: the
+// second over the first is 1 - speed / ZERO_CURRENT_SPEED. Time the same run
+// for the drag (below) -- measured apart, a wrong drag and a wrong
+// ZERO_THRUST_SPEED can cancel and look right.
 function apisqueenU3(volts) {
-  const RATED_VOLTS = 24;
-  const RATED_THRUST = 3 * g; // N, "3Kg"
-  const RATED_POWER = 290; // W, "290W"
-  const forward = RATED_THRUST * (volts / RATED_VOLTS) ** 1.5;
-  const fullPower = RATED_POWER * (volts / RATED_VOLTS) ** 2.25;
+  // Straight lines between the table's rows; outside it, the nearest row.
+  const v = Math.min(Math.max(volts, U3_TABLE[0][0]), U3_TABLE.at(-1)[0]);
+  let i = 0;
+  while (i < U3_TABLE.length - 2 && U3_TABLE[i + 1][0] < v) i++;
+  const [v0, ...low] = U3_TABLE[i];
+  const [v1, ...high] = U3_TABLE[i + 1];
+  const [forwardKg, forwardAmps, reverseKg, reverseAmps] = low.map(
+    (n, k) => n + ((high[k] - n) * (v - v0)) / (v1 - v0),
+  );
   return {
-    forward, // N at full power, command +1 -- 11.7 N at 13 V
-    reverse: forward * 0.7, // N at full power, command -1
+    forward: forwardKg * g, // N at full throttle, command +1 -- 10.3 N at 13 V
+    reverse: reverseKg * g, // N at full throttle, command -1 -- 10.3 N at 13 V
     deadBand: 0.05, // commands smaller than this make no thrust
     spinUp: 0.15, // s for the thrust to get most of the way to a new command
     volts,
-    fullCurrent: fullPower / volts, // A at full power -- 5.6 A at 13 V
+    fullCurrent: forwardAmps, // A at full throttle forward -- 3.25 A at 13 V
+    reverseCurrent: reverseAmps, // A at full throttle in reverse
+    zeroThrustSpeed: ZERO_THRUST_SPEED, // m/s of inflow that leaves no thrust
+    zeroCurrentSpeed: ZERO_CURRENT_SPEED, // ...and no current
     // The club drives them from two 4-in-1 ESCs, whose idle draw is tiny and
     // is counted in IDLE_CURRENT below rather than per thruster.
     perThrusterIdle: 0, // A
@@ -109,13 +136,14 @@ const cube = {
   centerOfMass: [0, 0, 0], // given: the middle
   // given: neutral, so it neither sinks nor floats
   buoyancy: CUBE_MASS * g,
-  // 6 cm above the center of mass -- assumed, to match the club: last season's
-  // ROVs pitched about 20-30 deg nose-down holding a heavy item (user,
-  // 2026-11-06), which points to a few cm here, not the 20 cm of a float "near
-  // the top" (used until 2026-11-06). With 20 cm the cube barely noticed a
-  // crab and self-leveling had nothing to do; with 6 cm the heavy crab (8 N)
-  // pitches it ~22 deg. Measure the real ROV and replace this.
-  centerOfBuoyancy: [0, 0.06, 0],
+  // 10 cm above the center of mass -- assumed. Last season's ROVs pitched
+  // about 20-30 deg nose-down holding a heavy item (user, 2026-11-06), which
+  // points to a few cm here, not the 20 cm of a float "near the top" (used
+  // until 2026-11-06): with 20 cm the cube barely noticed a crab. 6 cm was
+  // tried next (heavy crab: 22.6 deg); 10 cm makes the heavy crab (8 N) pitch
+  // it 15 deg -- still plain to see, while the triangle (5 cm) stays the tippy
+  // one. Measure the real ROV and replace this.
+  centerOfBuoyancy: [0, 0.1, 0],
 
   // How hard it is to start it spinning about x, y, z (kg m^2). Assumed: a
   // solid 12 kg cube, m * size^2 / 6. An open frame with heavy corners would
@@ -130,10 +158,19 @@ const cube = {
   // Drag along x, y, z: force = linear * speed + quadratic * speed^2.
   // Quadratic assumed from 1/2 * water density * Cd * area, with an open frame
   // blocking about half of each 0.25 m^2 face (Cd * area ~ 0.12 m^2) -> 60.
-  // Top speed forward with two 11.7 N thrusters: sqrt(23.4 / 60) ~ 0.6 m/s.
+  // Top speed forward with two 10.3 N thrusters: sqrt(20.6 / 60) ~ 0.6 m/s
+  // (0.51 measured -- the linear term takes some, and so does the thrusters'
+  // loss with water flowing in).
   drag: { linear: [4, 4, 4], quadratic: [60, 60, 60] },
   // Drag on turning about x, y, z, in the same form (N m per rad/s).
-  turnDrag: { linear: [0.5, 0.5, 0.5], quadratic: [3, 3, 3] },
+  //
+  // Pitch and roll (x, z) linear: 3, a guess -- it decides how the ROV rocks
+  // back after it is tipped. At 0.5 (until 2026-11-06) the cube rocked for
+  // ~8 s, and a student's P-only leveler at gain 0.3 never settled at any
+  // float height; at 3 the cube, tipped 15 deg and let go, settles in ~1 s
+  // with no swing back, and P-only settles in ~1.5 s. MEASURE IT: tip the real
+  // ROV ~15 deg in the pool, let go, and count the swings back and forth.
+  turnDrag: { linear: [3, 0.5, 3], quadratic: [3, 3, 3] },
 
   thruster: THRUSTER,
   idleCurrent: IDLE_CURRENT,

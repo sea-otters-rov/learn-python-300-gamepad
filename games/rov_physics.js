@@ -22,6 +22,15 @@ import { GRAVITY } from "./rov_profiles.js";
 
 const vec = ([x, y, z]) => new THREE.Vector3(x, y, z);
 
+// How much of its standstill thrust (or current) a propeller keeps with water
+// flowing into it at `inflow` m/s: all of it at a standstill, falling in a
+// straight line to none at `zeroAt`. Water against it (inflow below 0, as when
+// braking) is held at standstill -- real propellers push a little harder then,
+// but the maker's table is the most this file claims.
+function unloading(inflow, zeroAt) {
+  return THREE.MathUtils.clamp(1 - inflow / zeroAt, 0, 1);
+}
+
 // ===========================================================================
 // Vehicle
 // ===========================================================================
@@ -78,6 +87,8 @@ export class Vehicle {
       command: 0, // what it was told, -1 .. 1
       thrust: 0, // what it is doing, in newtons (lags the command)
       spin: 0, // propeller speed as a fraction of full, -1 .. 1
+      along: 0, // m/s the water moves past it, + the way it points
+      inflow: 0, // m/s of water flowing into the propeller as it pushes
     }));
 
     this.weight = profile.mass * GRAVITY;
@@ -99,6 +110,7 @@ export class Vehicle {
     this._push = new THREE.Vector3();
     this._lever = new THREE.Vector3();
     this._water = new THREE.Vector3();
+    this._point = new THREE.Vector3();
     this._turn = new THREE.Quaternion();
     this._lift = new THREE.Vector3(); // buoyancyTorque's own, so it can be
     this._liftTurn = new THREE.Quaternion(); // called mid-step safely
@@ -111,7 +123,7 @@ export class Vehicle {
     this.velocity.set(0, 0, 0);
     this.attitude.setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading);
     this.spinRate.set(0, 0, 0);
-    for (const t of this.thrusters) t.command = t.thrust = t.spin = 0;
+    for (const t of this.thrusters) t.command = t.thrust = t.spin = t.along = t.inflow = 0;
     this.payload = null;
     this.clawCurrent = 0;
   }
@@ -137,14 +149,17 @@ export class Vehicle {
   }
   // Amps the whole ROV is drawing now: idle electronics, the claw if it is
   // gripping something, and each thruster by how fast its propeller is
-  // actually spinning (see apisqueenU3 for the model).
+  // actually spinning and how much water is already flowing into it (see
+  // apisqueenU3 for the model).
   current() {
     const m = this.thrusterModel;
     let amps = this.profile.idleCurrent + this.clawCurrent;
     for (const t of this.thrusters) {
       const size = Math.abs(t.spin);
       const fraction = size < m.deadBand ? 0 : (size - m.deadBand) / (1 - m.deadBand);
-      amps += m.perThrusterIdle + m.fullCurrent * fraction ** 1.5;
+      const full = t.spin < 0 ? m.reverseCurrent : m.fullCurrent;
+      const unloaded = unloading(t.inflow, m.zeroCurrentSpeed);
+      amps += m.perThrusterIdle + full * fraction ** 1.5 * unloaded;
     }
     return amps;
   }
@@ -153,18 +168,32 @@ export class Vehicle {
   // could ever draw, to compare with the fuse
   mostCurrent() {
     const m = this.thrusterModel;
-    const thrusters = this.thrusters.length * (m.perThrusterIdle + m.fullCurrent);
+    const full = Math.max(m.fullCurrent, m.reverseCurrent);
+    const thrusters = this.thrusters.length * (m.perThrusterIdle + full);
     return this.profile.idleCurrent + this.profile.clawHoldCurrent + thrusters;
   }
 
-  thrustFor(spin) {
-    // A propeller makes no useful thrust inside its dead band, and less going
-    // backwards than forwards.
+  // The most a thruster can push right now, each way, in newtons (reverse
+  // negative): the maker's standstill figures, less what the water flowing
+  // past it takes away.
+  thrustLimits(t) {
+    const m = this.thrusterModel;
+    return [
+      m.forward * unloading(t.along, m.zeroThrustSpeed),
+      -m.reverse * unloading(-t.along, m.zeroThrustSpeed),
+    ];
+  }
+
+  thrustFor(spin, inflow = 0) {
+    // A propeller makes no useful thrust inside its dead band, can make less
+    // going backwards than forwards (the U3 does above 16 V), and makes less
+    // with water already flowing into it (inflow, m/s; see apisqueenU3).
     const m = this.thrusterModel;
     const size = Math.abs(spin);
     if (size < m.deadBand) return 0;
     const fraction = (size - m.deadBand) / (1 - m.deadBand);
-    return spin > 0 ? fraction * m.forward : -fraction * m.reverse;
+    const full = spin > 0 ? m.forward : -m.reverse;
+    return fraction * full * unloading(inflow, m.zeroThrustSpeed);
   }
 
   step(dt, current) {
@@ -172,12 +201,23 @@ export class Vehicle {
     const force = this._force.set(0, 0, 0); // body
     const torque = this._torque.set(0, 0, 0); // body
 
+    // The ROV's speed THROUGH the water, in its own axes. Drag uses it, and so
+    // do the thrusters: a propeller pushes less, and draws less, when water is
+    // already flowing into it.
+    this._inverse.copy(this.attitude).invert();
+    const water = this._water.subVectors(this.velocity, current).applyQuaternion(this._inverse);
+
     // Thrusters: each pushes along its own direction, from where it sits, so
     // one that is not lined up with the center of mass also turns the ROV.
     const settle = 1 - Math.exp(-dt / this.thrusterModel.spinUp);
     for (const t of this.thrusters) {
       t.spin += (THREE.MathUtils.clamp(t.command, -1, 1) - t.spin) * settle;
-      t.thrust = this.thrustFor(t.spin);
+      // Water speed into the propeller, along the way it is pushing: the
+      // ROV's own speed plus its turning, at this thruster.
+      const here = this._point.crossVectors(this.spinRate, t.offset).add(water);
+      t.along = here.dot(t.direction); // + : water moving past it the way it points
+      t.inflow = t.along * Math.sign(t.spin);
+      t.thrust = this.thrustFor(t.spin, t.inflow);
       const push = this._push.copy(t.direction).multiplyScalar(t.thrust);
       force.add(push);
       torque.add(this._lever.crossVectors(t.offset, push));
@@ -186,7 +226,6 @@ export class Vehicle {
     // Weight pulls down at the center of mass, so it never turns the ROV.
     // Buoyancy pushes up at the center of buoyancy -- when that is above the
     // center of mass, any tilt makes a torque that turns the ROV back upright.
-    this._inverse.copy(this.attitude).invert();
     const up = this._up.set(0, 1, 0).applyQuaternion(this._inverse); // world up, in body axes
     force.addScaledVector(up, this.buoyancy - this.weight);
     torque.add(this.buoyancyTorque(this._lever));
@@ -199,7 +238,6 @@ export class Vehicle {
 
     // Drag acts on speed THROUGH the water, in the ROV's own axes, because a
     // frame is a different shape seen from the front, side and top.
-    const water = this._water.subVectors(this.velocity, current).applyQuaternion(this._inverse);
     for (const [axis, k] of [["x", 0], ["y", 1], ["z", 2]]) {
       const v = water[axis];
       force[axis] -= p.drag.linear[k] * v + p.drag.quadratic[k] * v * Math.abs(v);
@@ -279,8 +317,10 @@ export class PilotAssist {
     this.vehicle = vehicle;
     this.settings = settings;
     const m = vehicle.thrusterModel;
-    this.most = m.forward; // N one thruster can push forwards
-    this.leastReverse = -m.reverse; // N backwards: propellers are weaker that way
+    // N one thruster can push at a standstill, forwards and backwards (can be
+    // weaker). Only for sizing a full stick; flying uses Vehicle.thrustLimits.
+    this.most = m.forward;
+    this.leastReverse = -m.reverse;
     this.mix = mixingMatrix(vehicle.thrusters);
     // The most push (N, or N m for turning) the thrusters can make on each
     // axis alone, in each direction -- backwards can be less, because some
@@ -317,11 +357,12 @@ export class PilotAssist {
 
   // Newtons wanted from a thruster -> the command that makes them. The
   // inverse of Vehicle.thrustFor: step over the dead band, and ask harder
-  // when going backwards.
-  commandFor(newtons) {
+  // when going backwards or with water flowing in. most / least are what it
+  // can push now (Vehicle.thrustLimits).
+  commandFor(newtons, most, least) {
     const m = this.vehicle.thrusterModel;
     if (Math.abs(newtons) < 1e-6) return 0;
-    const fraction = newtons > 0 ? newtons / m.forward : -newtons / m.reverse;
+    const fraction = newtons > 0 ? newtons / most : newtons / least;
     const size = m.deadBand + Math.min(1, fraction) * (1 - m.deadBand);
     return newtons > 0 ? size : -size;
   }
@@ -342,7 +383,7 @@ export class PilotAssist {
 
     // Hold pitch and roll like a spring with a shock absorber (P and D), plus
     // an integral term that pushes harder the longer an error lasts, plus
-    // exactly cancelling the float's pull at the current angle, so the ROV
+    // exactly canceling the float's pull at the current angle, so the ROV
     // stays where it is put rather than sagging back towards level.
     //
     // Without the integral a steady load wins: the spring alone settles where
@@ -406,29 +447,37 @@ export class PilotAssist {
 
     const holding = this.apply(attitude);
     const going = this.apply(moving);
+    // What each thruster can actually push now. Moving, a thruster with water
+    // flowing into it has less than the maker's standstill figure; planning
+    // with that figure left the triangle, sliding sideways, short at its back
+    // thruster -- it turned at 7 deg/s with nobody asking.
+    const limits = v.thrusters.map((t) => v.thrustLimits(t));
 
     // Asking for more tilt than the thrusters can give: scale the whole
     // stabilizing push down together. Clipping each thruster separately would
     // be stronger, but with reverse weaker than forward the clipped pairs no
     // longer cancel -- the cube drifted upwards 1.4 m in 6 s at full tilt.
     let fits = 1;
-    for (const h of holding) {
-      if (h > this.most) fits = Math.min(fits, this.most / h);
-      if (h < this.leastReverse) fits = Math.min(fits, this.leastReverse / h);
-    }
+    holding.forEach((h, i) => {
+      const [most, least] = limits[i];
+      if (h > most) fits = Math.min(fits, most / h);
+      if (h < least) fits = Math.min(fits, least / h);
+    });
     for (let i = 0; i < holding.length; i++) holding[i] *= fits;
 
     // If the thrusters cannot do both, staying upright wins: scale back the
     // moving part until every thruster is within its limits.
     let share = 1;
-    for (let i = 0; i < holding.length; i++) {
-      if (going[i] > 0) share = Math.min(share, (this.most - holding[i]) / going[i]);
-      if (going[i] < 0) share = Math.min(share, (this.leastReverse - holding[i]) / going[i]);
-    }
+    going.forEach((g, i) => {
+      const [most, least] = limits[i];
+      if (g > 0) share = Math.min(share, (most - holding[i]) / g);
+      if (g < 0) share = Math.min(share, (least - holding[i]) / g);
+    });
     share = Math.max(0, share);
     v.thrusters.forEach((t, i) => {
-      const newtons = THREE.MathUtils.clamp(holding[i] + going[i] * share, this.leastReverse, this.most);
-      t.command = this.commandFor(newtons);
+      const [most, least] = limits[i];
+      const newtons = THREE.MathUtils.clamp(holding[i] + going[i] * share, least, most);
+      t.command = this.commandFor(newtons, most, least);
     });
   }
 
@@ -442,7 +491,7 @@ export class PilotAssist {
 // each thruster push? Each thruster's column says what one newton from it
 // does to all six; inverting that table (a least-squares "pseudo-inverse")
 // answers the question backwards. Rows are thrusters, columns the six axes,
-// and each entry is newtons from that thruster per newton (or newton-metre)
+// and each entry is newtons from that thruster per newton (or newton-meter)
 // wanted.
 function mixingMatrix(thrusters) {
   const columns = thrusters.map((t) => {

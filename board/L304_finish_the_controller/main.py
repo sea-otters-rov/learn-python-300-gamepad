@@ -9,8 +9,6 @@ Keep the sticks and the board still for the first second: that is when the
 sticks' centers and "level" are measured.
 """
 
-import time
-
 import board
 import busio
 import digitalio
@@ -29,13 +27,15 @@ sensors = imu.IMU(i2c)
 
 # ---- How this breadboard is built ---------------------------------------------
 # Check each on the Controller check page: push a stick up, its dot must go up;
-# push it right, it goes right.
+# push it right, it goes right, etc.
 #
 # connect() measures where each stick rests, then hands back the stick wired to
 # A0/A1 first. On this breadboard that one is on the RIGHT. Wired the other way
 # round, swap the two names: left, right = sticks.connect(i2c)
-right, left = sticks.connect(i2c)
-# The left stick is mounted turned 180 degrees from the right one, so both of its
+
+# dead_zone is how far from center a stick must be to read as 0.0
+right, left = sticks.connect(i2c, dead_zone=0.06)
+# The left stick is mounted 180 degrees from the right one, so both of its
 # axes read backwards. Mounted facing the same way, delete these two lines. One
 # axis wrong on its own? Flip only that one.
 left.flip_x = -1
@@ -51,8 +51,8 @@ buttons = (
     (gamepad.Y, board.D10),
     (gamepad.LB, board.D0),
     (gamepad.RB, board.D1),
-    (gamepad.LT, board.D2),
-    (gamepad.RT, board.D3),
+    (gamepad.LT, board.D2),  # not wired by default -- an extra
+    (gamepad.RT, board.D3),  # not wired by default -- an extra
     (gamepad.START, board.D6),
 )
 switches = []
@@ -73,17 +73,8 @@ for reading in range(level_readings):
 level_x = total_x / level_readings
 level_y = total_y / level_readings
 
-# True: tilt steers the left stick, for the marble maze. False: the left stick does.
-use_tilt = False
-
 while True:
-    # Each .x or .y asks the ADS1115 for a fresh reading, about 2 ms each, so
-    # read each one once and keep it.
-    left_x = left.x
-    left_y = left.y
-    right_x = right.x
-    right_y = right.y
-
+    # First handle the tilt, like before
     sensor_x, sensor_y, sensor_z = sensors.acceleration
     board_x = sensor_y  # turned, as above
     board_y = sensor_x
@@ -92,14 +83,17 @@ while True:
     pad.tilt_x = tip_x / full_tilt
     pad.tilt_y = tip_y / full_tilt
 
+    # Each .x or .y asks the ADS1115 for a fresh reading, about 2 ms each, so
+    # read each one once and keep it.
+    left_x = left.x
+    left_y = left.y
+    right_x = right.x
+    right_y = right.y
+
     pad.right_x = right_x
     pad.right_y = right_y
-    if use_tilt:
-        pad.left_x = pad.tilt_x
-        pad.left_y = pad.tilt_y
-    else:
-        pad.left_x = left_x
-        pad.left_y = left_y
+    pad.left_x = left_x
+    pad.left_y = left_y
 
     for button_name, switch in switches:
         pad.set_button(button_name, not switch.value)
@@ -116,16 +110,7 @@ while True:
 
 # Try these:
 #   - Let go of a stick and watch the console. Does it come back to exactly 0?
-#     Now add left.dead_zone = 0 under the flip lines. What changed, and why
+#     Now set dead_zone = 0 on line 39. What changed, and why
 #     would that matter to an ROV that is meant to sit still?
-#   - Set use_tilt = True and play the maze with tilt, then with the stick.
-#     Which is easier? Why might a pilot want both?
-#   - Swap the names to left, right = sticks.connect(i2c). Which dot moves now
-#     when you push your left stick?
-#   - Change gamepad.START to gamepad.BACK in the buttons. Which button lights
-#     on the page now?
-#   - Change frequency=400_000 to frequency=100_000. Count how many lines the
-#     console prints in a few seconds before and after. Why did it change?
-#   - Give two buttons the same pin: change board.D10 to board.D7. The error
-#     says RX, a name you never typed -- D7's other name is RX, used when the
-#     pin talks to another chip. Which line of yours does it point at?
+#   - Try the maze again, now with the stick. Which is easier?
+#     http://localhost:8770/games/marble_maze.html

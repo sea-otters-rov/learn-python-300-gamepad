@@ -139,9 +139,10 @@ const CRAB_COUNT = 5;
 const CRAB_SEED = 2026; // same seed, same crabs in the same places
 const CRAB_WET_WEIGHT = 0.5; // N: a held crab pulls the claw down this much
 // One crab is heavy, the way MATE tasks have one heavy item. 8 N on the claw
-// pitches an unleveled cube ~22 deg, swinging to ~27 as it grabs -- last
-// season's ROVs pitched 20-30 deg with a heavy item. It is what makes
-// self-leveling (lessons 309-310) worth writing.
+// pitches an unleveled cube ~15 deg (its float 10 cm above its center of mass)
+// and the triangle ~41 deg -- last season's ROVs pitched
+// 20-30 deg with a heavy item. It is what makes self-leveling (lesson 309)
+// worth writing.
 const HEAVY_CRAB = 0; // which crab
 const HEAVY_CRAB_WET_WEIGHT = 8; // N
 const HEAVY_CRAB_SCALE = 1.4; // drawn bigger, so it can be told apart
@@ -183,7 +184,7 @@ const PHYSICS_STEP = 1 / 240;
 const PILOT_EVERY = 4;
 const CURRENT = new THREE.Vector3(0, 0, 0); // a pool has none; a lake would
 const SURFACE = 0;
-const GRAB_RADIUS = 0.16; // m from claw tip to crab centre
+const GRAB_RADIUS = 0.16; // m from claw tip to crab center
 const CLAW_SPEED = 4; // rad/s the jaws swing
 const CRAB_HALF_HEIGHT = 0.05;
 const SINK_SPEED = 0.5; // m/s a dropped crab falls
@@ -263,7 +264,7 @@ const tileImage = (() => {
 })();
 
 function tiled(width, height) {
-  // one texture metre holds 4 x 4 tiles, so tiles are 25 cm like a real pool
+  // one texture meter holds 4 x 4 tiles, so tiles are 25 cm like a real pool
   const texture = new THREE.CanvasTexture(tileImage);
   texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(width, height);
@@ -1008,7 +1009,7 @@ function clawText() {
 }
 
 function bar(amount) {
-  // -1 .. 1 as five cells either side of a centre line
+  // -1 .. 1 as five cells either side of a center line
   const cells = Math.round(Math.min(1, Math.abs(amount)) * 5);
   const left = amount < 0 ? " ".repeat(5 - cells) + "█".repeat(cells) : " ".repeat(5);
   const right = amount > 0 ? "█".repeat(cells) + " ".repeat(5 - cells) : " ".repeat(5);

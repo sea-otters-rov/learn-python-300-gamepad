@@ -29,9 +29,19 @@
   // IntelliSense for CircuitPython: .venv holds stubs pinned to the firmware,
   // and board\ is the board's root, so imports resolve here the way they do on
   // the board. board\lib is plain .py, which Pylance reads directly.
+  //
+  // sim\ is there for the sim lessons, which run with sim\ as their root (the
+  // same as the board lessons with board\). Without it, `from sim import Pad`
+  // finds the FOLDER sim\ instead of sim\sim.py and flags Pad as unknown; and
+  // `import cube` finds nothing. Leave reportAttributeAccessIssue on: it is
+  // what underlines a typo like cube.FORWARD_LETF before the student saves.
   // ---------------------------------------------------------------------------
   "python.defaultInterpreterPath": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
-  "python.analysis.extraPaths": ["${workspaceFolder}/board", "${workspaceFolder}/board/lib"],
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/board",
+    "${workspaceFolder}/board/lib",
+    "${workspaceFolder}/sim"
+  ],
   "python.analysis.typeCheckingMode": "basic",
   "python.analysis.diagnosticSeverityOverrides": {
     "reportMissingModuleSource": "none"
